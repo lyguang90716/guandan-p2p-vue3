@@ -1,0 +1,13 @@
+{
+  "appId": "com.guandan.p2p",
+  "appName": "Guandan P2P",
+  "webDir": "dist",
+  "bundledWebRuntime": false,
+  "server": {
+    "androidScheme": "https",
+    "cleartext": true
+  },
+  "android": {
+    "allowMixedContent": true
+  }
+}
