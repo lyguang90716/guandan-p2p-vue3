@@ -150,6 +150,10 @@ const hostPort = ref(8848)
 const qrDataUrl = ref('')
 const qrLibOk = ref(true)
 
+// ★ v2.1 测试脚手架:把 net 暴露到 window(给 4-tab BC 自动化测试用,
+//   production 也无害——net 是 ESM 单例,本来就是 reactive 状态)
+if (typeof window !== 'undefined') window.__gd_net = net
+
 // qrcode 库可选,动态 import,失败时降级为只显示文本地址
 let QRCodeLib = null
 async function ensureQrcodeLib() {
