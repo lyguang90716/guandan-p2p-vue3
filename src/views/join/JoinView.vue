@@ -2,7 +2,27 @@
   <div class="page">
     <div class="bg"></div>
     <h1 class="title">连热点加入房间</h1>
-    <div class="card">
+
+    <!-- Capacitor / Android 真机:用 IP 加入 -->
+    <div v-if="isNative" class="card">
+      <h2 class="card-title">方式 1:扫码 / 输入房主 IP</h2>
+      <p class="card-hint">让房主把手机开热点,你连上同一热点后,扫码或输入他的 IP</p>
+      <div class="input-row">
+        <span class="input-label">IP:端口</span>
+        <input
+          v-model="hostAddress"
+          placeholder="192.168.43.1:8848"
+          class="input"
+        />
+      </div>
+      <div class="qr-row" v-if="route.query.scanHost">
+        <p class="card-hint">扫到的房主地址:{{ route.query.scanHost }}</p>
+        <button class="action-btn-small" @click="useScan">使用该地址</button>
+      </div>
+    </div>
+
+    <!-- 浏览器版:用 6 位房间号 -->
+    <div v-else class="card">
       <h2 class="card-title">方式 1:输入房间号</h2>
       <div class="input-row">
         <span class="input-label">房间号</span>
@@ -10,10 +30,16 @@
       </div>
       <p class="card-hint">房主开热点后,会显示一个 6 位数字房间号</p>
     </div>
+
     <div class="card">
       <h2 class="card-title">方式 2:本机模拟(同浏览器多标签)</h2>
-      <p class="card-hint">浏览器内已用 BroadcastChannel 自动通信,直接用房间号加入即可</p>
+      <p class="card-hint">
+        浏览器内已用 BroadcastChannel 自动通信,
+        <span v-if="isNative">暂未启用</span>
+        <span v-else>直接用房间号加入即可</span>
+      </p>
     </div>
+
     <div class="action">
       <button class="action-btn" :class="{ disabled: !canJoin }" @click="onJoin">加入房间</button>
     </div>
@@ -21,16 +47,50 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
+import { isNativeCapacitor } from '@/common/ws-server.js'
+
 const router = useRouter()
 const route = useRoute()
-// URL ?roomNo=xxxxxx 直接预填(分享链接 / 扫码加入)
+const isNative = ref(false)
+const hostAddress = ref('')
 const roomNo = ref(route.query.roomNo ? String(route.query.roomNo) : '')
-const canJoin = computed(() => roomNo.value.length >= 4)
+
+onMounted(() => {
+  isNative.value = isNativeCapacitor()
+  // 预填扫码传入的 host
+  if (route.query.host) {
+    hostAddress.value = String(route.query.host)
+  } else if (route.query.scanHost) {
+    hostAddress.value = String(route.query.scanHost)
+  } else if (route.query.ip) {
+    // 兼容:从 URL ?ip=1.2.3.4&port=8848 预填
+    const p = route.query.port ? String(route.query.port) : '8848'
+    hostAddress.value = `${String(route.query.ip)}:${p}`
+  }
+})
+
+const canJoin = computed(() => {
+  if (isNative.value) {
+    // 校验 IP:端口 形式
+    return /^\d{1,3}(\.\d{1,3}){3}:\d{2,5}$/.test(hostAddress.value.trim())
+  }
+  return roomNo.value.length >= 4
+})
+
+function useScan() {
+  if (route.query.scanHost) hostAddress.value = String(route.query.scanHost)
+}
+
 function onJoin() {
   if (!canJoin.value) return
-  router.push(`/room?role=joiner&roomNo=${roomNo.value}`)
+  if (isNative.value) {
+    // ws 模式:URL ?role=joiner&host=1.2.3.4:8848
+    router.push(`/room?role=joiner&host=${encodeURIComponent(hostAddress.value.trim())}`)
+  } else {
+    router.push(`/room?role=joiner&roomNo=${roomNo.value}`)
+  }
 }
 </script>
 
@@ -60,6 +120,12 @@ function onJoin() {
   flex: 1; background: transparent; border: none; outline: none;
   color: #fff; font-size: 17px;
   font-family: inherit;
+}
+.qr-row { margin-top: 12px; display: flex; align-items: center; gap: 8px; }
+.action-btn-small {
+  background: rgba(108,195,245,0.25);
+  color: #fff; border: none; border-radius: 6px;
+  padding: 4px 10px; font-size: 12px; cursor: pointer;
 }
 .action { margin-top: 24px; }
 .action-btn {

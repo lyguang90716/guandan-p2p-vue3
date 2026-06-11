@@ -48,6 +48,10 @@ dependencies {
     implementation "androidx.viewpager2:viewpager2:1.1.0"
     implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1"
     implementation "com.google.code.gson:gson:2.11.0"
+    // Native WebSocket server (host side on Android) — used by WsServerPlugin.
+    // org.java-websocket:Java-WebSocket — the original library, supports
+    // modern Android API levels (24+). v1.5.4 is the last 1.x stable.
+    implementation 'org.java-websocket:Java-WebSocket:1.5.4'
     implementation project(':capacitor-android')
     testImplementation "junit:junit:$junitVersion"
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"

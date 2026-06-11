@@ -76,6 +76,19 @@
         <span class="info-room-label">房间号：</span>
         <span class="info-room-num">{{ roomNo }}</span>
       </div>
+      <!-- v2.0 改造:host 端展示本机 IP + 端口 + 二维码 (扫码加入) -->
+      <div v-if="isHost" class="host-info">
+        <div class="host-info-row">
+          <span class="host-info-label">本机 IP</span>
+          <span class="host-info-value">{{ hostIp || '加载中…' }}</span>
+          <span class="host-info-port">:{{ hostPort }}</span>
+        </div>
+        <div class="host-info-qr" v-if="qrDataUrl">
+          <img :src="qrDataUrl" alt="QR" class="qr-img" />
+          <p class="host-info-hint">扫码 / 输 IP:端口 加入</p>
+        </div>
+        <div v-else-if="!qrLibOk" class="host-info-hint qr-missing">未装 qrcode 库,展示纯文本地址</div>
+      </div>
       <div class="info-row">
         <div class="info-cell">
           <span class="info-cell-label">过几：</span>
@@ -91,7 +104,9 @@
         </div>
       </div>
       <div class="info-actions">
-        <button class="btn btn-blue" @click="onInvite">复制房间号</button>
+        <button class="btn btn-blue" @click="onInvite">
+          {{ isHost ? '复制 IP:端口' : '复制房间号' }}
+        </button>
         <button class="btn btn-orange" @click="onToggleReady">
           {{ myReady ? '取消准备' : (isHost && peers.size === 4 ? '开局' : '准备') }}
         </button>
@@ -123,11 +138,36 @@ import { ref, reactive, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import storage from '@/common/storage.js'
 import net from '@/common/network.js'
+import WsServer, { isNativeCapacitor } from '@/common/ws-server.js'
 import NicknameEditor from '@/components/NicknameEditor.vue'
 
 const route = useRoute()
 const router = useRouter()
 const isHost = ref(route.query.role !== 'joiner')
+const isNative = ref(false)
+const hostIp = ref('')
+const hostPort = ref(8848)
+const qrDataUrl = ref('')
+const qrLibOk = ref(true)
+
+// qrcode 库可选,动态 import,失败时降级为只显示文本地址
+let QRCodeLib = null
+async function ensureQrcodeLib() {
+  if (QRCodeLib !== null) return QRCodeLib
+  try {
+    const mod = await import('qrcode')
+    QRCodeLib = (mod && mod.default) || mod
+    if (typeof QRCodeLib?.toDataURL !== 'function') {
+      QRCodeLib = null
+      qrLibOk.value = false
+    }
+  } catch (e) {
+    QRCodeLib = null
+    qrLibOk.value = false
+  }
+  return QRCodeLib
+}
+
 // 房主房间号生成与持久化:首次生成后存 sessionStorage(per-tab 隔离,4-tab 演示不会撞房号)
 // 真实设备 1v1 场景:刷新页面仍能用同一个房间号继续开局
 // joiner 必须沿用 URL 里的 roomNo(房主的房间号),不能自己随机生成新的
@@ -153,10 +193,22 @@ const showNickEditor = ref(false)
 const netStatus = ref('⏺')
 const peers = reactive(new Map())
 
+async function generateQr() {
+  if (!hostIp.value) return
+  const lib = await ensureQrcodeLib()
+  if (!lib) return
+  const text = `ws://${hostIp.value}:${hostPort.value}`
+  try {
+    qrDataUrl.value = await lib.toDataURL(text, { width: 180, margin: 1 })
+  } catch (e) {
+    qrLibOk.value = false
+  }
+}
+
 function getPeer(seat) { return peers.get(seat) }
 function seatClass(idx) { return peers.has(idx) ? 'filled' : 'empty' }
 
-function initNetwork() {
+async function initNetwork() {
   net.on('connect', ({ seat, info }) => {
     netStatus.value = '🟢'
     // ★ v3.8 P1 修复：用 connect 事件拿正确的 assignedSeat(不是 from)
@@ -214,9 +266,34 @@ function initNetwork() {
     netStatus.value = r.ok ? '🟢' : '🔴'
     // ★ v3.8 P1 修复：host 自己也算 seat 0（之前漏掉,导致 peers.size 永远 < 4,开局按钮不显示）
     peers.set(0, { nickname: myName.value, avatar: myAvatar.value, ready: myReady.value })
+    // ★ v2.0 改造:host 端取本机 IP(供 joiner 用)
+    if (isNative.value) {
+      try {
+        const ipRes = await WsServer.getLocalIp()
+        hostIp.value = ipRes?.ip || ''
+        // 端口从 transport 拿;AndroidWsTransport 同步返回 getBoundPort()
+        const t = net._getTransport && net._getTransport()
+        if (t && typeof t.getBoundPort === 'function') hostPort.value = t.getBoundPort() || 8848
+        await generateQr()
+      } catch (e) {
+        hostIp.value = '(获取失败)'
+      }
+    } else {
+      // 浏览器版:用当前 location.hostname 作为"本机 IP"(本地测试用)
+      hostIp.value = (typeof location !== 'undefined' && location.hostname) || '127.0.0.1'
+      await generateQr()
+    }
   } else {
-    const r = net.joinRoom(route.query.roomNo || 'default', { nickname: myName.value, avatar: myAvatar.value })
-    netStatus.value = r.ok ? '🟢' : '🔴'
+    // joiner: 支持 ?host=1.2.3.4:8848 (Capacitor) 或 ?roomNo=xxx (浏览器)
+    const hostParam = route.query.host ? String(route.query.host) : null
+    if (hostParam && hostParam.indexOf(':') >= 0) {
+      // ws 模式:network.joinRoom 内部解析 host:port
+      const r = net.joinRoom(hostParam, { nickname: myName.value, avatar: myAvatar.value })
+      netStatus.value = r.ok ? '🟢' : '🔴'
+    } else {
+      const r = net.joinRoom(route.query.roomNo || 'default', { nickname: myName.value, avatar: myAvatar.value })
+      netStatus.value = r.ok ? '🟢' : '🔴'
+    }
   }
 }
 
@@ -224,6 +301,7 @@ onMounted(() => {
   // URL ?nick=玩家-A&avatar=♠ 优先于 localStorage(扫码加入时传参 / 测试脚本控制)
   myName.value = route.query.nick ? String(route.query.nick) : storage.getNickname()
   myAvatar.value = route.query.avatar ? String(route.query.avatar) : storage.getAvatar()
+  isNative.value = isNativeCapacitor()
   initNetwork()
 })
 // ★ v3.8 P1 修复:不在这里关 network!
@@ -243,13 +321,23 @@ function onNickConfirm({ nickname, avatar }) {
   net.broadcast({ type: 'NICK_UPDATE', payload: { nickname, avatar } })
 }
 function onDetail() {
-  alert(`房间号: ${roomNo.value}\n人数: ${peers.size}/4\n网络: ${netStatus.value === '🟢' ? '正常' : '异常'}\n模式: 局域网 P2P(浏览器版用 BroadcastChannel)`)
+  const mode = isNative.value ? '真机 WebSocket (Capacitor)' : '浏览器 BroadcastChannel'
+  const addr = isHost.value && hostIp.value ? `\n本机 IP: ${hostIp.value}:${hostPort.value}` : ''
+  alert(`房间号: ${roomNo.value}${addr}\n人数: ${peers.size}/4\n网络: ${netStatus.value === '🟢' ? '正常' : '异常'}\n模式: 局域网 P2P (${mode})`)
 }
 function onInvite() {
-  navigator.clipboard.writeText(roomNo.value).then(
-    () => alert(`已复制房间号: ${roomNo.value}\n\n让朋友打开 https://你的IP:8848 选"连热点加入",输入此房间号`),
-    () => alert(`房间号: ${roomNo.value}`)
-  )
+  if (isHost.value && hostIp.value) {
+    const text = `${hostIp.value}:${hostPort.value}`
+    navigator.clipboard.writeText(text).then(
+      () => alert(`已复制 IP:端口 — ${text}\n\n朋友打开 App 选"连热点加入",输入此地址`),
+      () => alert(`IP:端口: ${text}`)
+    )
+  } else {
+    navigator.clipboard.writeText(roomNo.value).then(
+      () => alert(`已复制房间号: ${roomNo.value}\n\n让朋友打开 https://你的IP:8848 选"连热点加入",输入此房间号`),
+      () => alert(`房间号: ${roomNo.value}`)
+    )
+  }
 }
 function onToggleReady() {
   myReady.value = !myReady.value
@@ -424,6 +512,25 @@ function onCut() { alert('切牌完成') }
   border: none; cursor: pointer;
 }
 .info-roomno { text-align: center; font-size: 22px; margin: 16px 0 18px; }
+.host-info {
+  background: rgba(255,255,255,0.55);
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin: -6px 0 14px;
+  text-align: center;
+  color: #2a3464;
+}
+.host-info-row {
+  display: flex; align-items: baseline; justify-content: center; gap: 6px;
+  font-size: 13px; margin-bottom: 8px;
+}
+.host-info-label { opacity: 0.6; }
+.host-info-value { font-weight: bold; font-size: 18px; letter-spacing: 1px; color: #2c6fd9; }
+.host-info-port { font-size: 14px; color: #2c6fd9; }
+.host-info-qr { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.qr-img { width: 180px; height: 180px; background: #fff; border-radius: 6px; padding: 4px; }
+.host-info-hint { font-size: 11px; color: #6e3f00; opacity: 0.85; }
+.qr-missing { color: #b71c1c; }
 .info-room-num { font-weight: bold; color: #2c6fd9; font-size: 30px; margin-left: 6px; }
 .info-row { display: flex; justify-content: space-between; margin-bottom: 18px; font-size: 14px; }
 .info-cell-value { color: #ff7e3d; font-weight: bold; }

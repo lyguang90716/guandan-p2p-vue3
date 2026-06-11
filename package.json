@@ -7,11 +7,12 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "node src/common/guandan-engine.test.js && node src/common/guandan-ai.test.js && node src/common/guandan-game.test.js && node src/common/deal-animation.test.js && node src/common/audio.test.js && node src/common/card-api.test.js && node src/common/network.test.js && node src/common/network-multitab.test.js",
+    "test": "node src/common/guandan-engine.test.js && node src/common/guandan-ai.test.js && node src/common/guandan-game.test.js && node src/common/deal-animation.test.js && node src/common/audio.test.js && node src/common/card-api.test.js && node src/common/network.test.js && node src/common/network-multitab.test.js && node src/common/ws-server.test.js",
     "test:engine": "node src/common/guandan-engine.test.js",
     "test:ai": "node src/common/guandan-ai.test.js",
     "test:game": "node src/common/guandan-game.test.js",
     "test:anim": "node src/common/deal-animation.test.js && node src/common/audio.test.js",
+    "test:ws": "node src/common/ws-server.test.js",
     "bench": "node src/benchmark.js"
   },
   "dependencies": {
@@ -22,6 +23,7 @@
     "@capacitor/preferences": "^8.0.1",
     "@capacitor/splash-screen": "^8.0.1",
     "@capacitor/status-bar": "^8.0.2",
+    "qrcode": "^1.5.4",
     "vue": "^3.4.0",
     "vue-router": "^4.2.0"
   },

@@ -30,6 +30,8 @@
 
 import { BroadcastChannelTransport } from './network-transport-bc.js'
 import { WebSocketTransport } from './network-transport-ws.js'
+import { AndroidWsTransport } from './network-transport-android-ws.js'
+import { isNativeCapacitor } from './ws-server.js'
 
 // ============== 模块状态 ==============
 const handlers = {}
@@ -78,12 +80,14 @@ let _transportFactory = null
 
 /**
  * 默认 Transport 选择:
- *   - Capacitor WebView: WebSocketTransport
- *   - 其他 (浏览器 / Node 测试): BroadcastChannelTransport
+ *   - Capacitor WebView (native Android): AndroidWsTransport
+ *     (host 走原生 WsServer 插件,joiner 走 WebView 自带 WebSocket)
+ *   - 浏览器 / Node 测试: BroadcastChannelTransport
+ *   - 浏览器版 v1.0 fallback: WebSocketTransport (test only,需要 npm 'ws')
  */
 function _defaultTransport() {
-  if (typeof window !== 'undefined' && window.Capacitor) {
-    return new WebSocketTransport()
+  if (isNativeCapacitor()) {
+    return new AndroidWsTransport()
   }
   return new BroadcastChannelTransport()
 }
@@ -394,7 +398,24 @@ function joinRoom(hostRoomId, self, opts) {
   selfInfo = { ...self, uuid: ensureUuid() }
   isHostFlag = false
   selfSeat = -1
-  roomId = hostRoomId
+  // 兼容签名: hostRoomId 含 ':' 时解析为 ws host:port 形式 (Android Capacitor 路径)
+  // 不含 ':' 或 ':' 后面没合法端口时 → 当 BC 房间号 (浏览器路径)
+  let parsedHostIp = (opts && opts.hostIp) || null
+  let parsedHostPort = (opts && opts.hostPort) || null
+  let isWsMode = false
+  if (parsedHostIp && parsedHostPort) {
+    isWsMode = true
+  } else if (typeof hostRoomId === 'string' && hostRoomId.indexOf(':') >= 0) {
+    const idx = hostRoomId.lastIndexOf(':')
+    const candidateIp = hostRoomId.slice(0, idx)
+    const candidatePort = parseInt(hostRoomId.slice(idx + 1), 10)
+    if (candidateIp && !Number.isNaN(candidatePort) && candidatePort > 0 && candidatePort < 65536) {
+      parsedHostIp = candidateIp
+      parsedHostPort = candidatePort
+      isWsMode = true
+    }
+  }
+  roomId = isWsMode ? 'ws' : hostRoomId
 
   try {
     transport = _createTransport()
@@ -403,9 +424,13 @@ function joinRoom(hostRoomId, self, opts) {
   }
   transport.onMessage(_onTransportMessage)
   // 异步 open。WS joiner 等 ws 连接建立后,再发 JOIN
-  const hostIp = (opts && opts.hostIp) || null
-  const hostPort = (opts && opts.hostPort) || null
-  transport.open('client', hostIp, hostPort).then(() => {
+  // BC 模式:保持原行为 (transport.open('client', null, null)) — BC 内部 fallback 到 'default' 通道
+  //         房间号隔离依赖上层 setRoomId,见 RoomView.vue
+  // WS 模式:传 hostIp/hostPort 给 transport.open
+  const openArgs = isWsMode
+    ? ['client', parsedHostIp, parsedHostPort]
+    : ['client', null, null]
+  transport.open(...openArgs).then(() => {
     if (!transport) return
     // 立即发 JOIN。joiner 端 selfSeat=-1,host 会按 uuid 复用或分配新 seat
     sendMessage({ type: 'JOIN', payload: selfInfo })
