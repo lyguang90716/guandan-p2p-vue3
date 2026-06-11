@@ -33,6 +33,9 @@ if (!globalThis.window) globalThis.window = {}
 const origCap = globalThis.window.Capacitor
 const origPlugins = globalThis.window.Capacitor?.Plugins
 
+// 必须在 ws-server.js 第一次 import 之前设上 (registerPlugin 的 web fallback 闭包捕获 log 引用)
+globalThis.__wsServerTestLog = []
+
 // 测试用 plugin 状态
 const pluginCallLog = []
 const pluginListeners = {}
@@ -306,6 +309,46 @@ console.log('\n=== 13. _setTransportFactory 优先于 _defaultTransport ===')
   assert('startAsHost 返回 ok', r.ok === true)
   mod.close()
   mod._resetTransportFactory()
+}
+
+console.log('\n=== 14. t2.1: AndroidWsTransport.bindLastSenderSeat 真正调 WsServer.bindSeat (no more no-op) ===')
+{
+  // 通过 globalThis.__wsServerTestLog 钩子捕获 plugin 调用 (top-level 之前已设过 [])
+  globalThis.__wsServerTestLog.length = 0
+  const { AndroidWsTransport } = await import('./network-transport-android-ws.js?t=ws-server-bind-' + Date.now())
+  const t = new AndroidWsTransport({ port: 0 })
+  t._mode = 'self'
+  t._lastSenderConnId = 42
+  t.bindLastSenderSeat(2)
+  // 等待 microtask flush
+  await new Promise(r => setTimeout(r, 20))
+  const log = globalThis.__wsServerTestLog
+  eq('plugin.bindSeat 被调用 1 次', log.length, 1)
+  eq('plugin.bindSeat 收到 connId=42, seat=2', log[0], { m: 'bindSeat', opts: { connId: 42, seat: 2 } })
+}
+
+console.log('\n=== 15. t2.1: AndroidWsTransport.bindLastSenderSeat 在 _lastSenderConnId=-1 时不调 plugin ===')
+{
+  globalThis.__wsServerTestLog.length = 0
+  const { AndroidWsTransport } = await import('./network-transport-android-ws.js?t=ws-server-bind-2-' + Date.now())
+  const t = new AndroidWsTransport({ port: 0 })
+  t._mode = 'self'
+  t._lastSenderConnId = -1  // 还没收到任何 message
+  t.bindLastSenderSeat(2)
+  await new Promise(r => setTimeout(r, 20))
+  eq('plugin.bindSeat 不被调用 (0 次)', globalThis.__wsServerTestLog.length, 0)
+}
+
+console.log('\n=== 16. t2.1: AndroidWsTransport.bindLastSenderSeat 在 client 模式 (mode !== self) 时不调 plugin ===')
+{
+  globalThis.__wsServerTestLog.length = 0
+  const { AndroidWsTransport } = await import('./network-transport-android-ws.js?t=ws-server-bind-3-' + Date.now())
+  const t = new AndroidWsTransport({ port: 0 })
+  t._mode = 'client'
+  t._lastSenderConnId = 42
+  t.bindLastSenderSeat(2)
+  await new Promise(r => setTimeout(r, 20))
+  eq('client 模式 plugin.bindSeat 不被调用', globalThis.__wsServerTestLog.length, 0)
 }
 
 console.log('\n========== 测试结果: ' + pass + ' 通过 / ' + fail + ' 失败 ==========')

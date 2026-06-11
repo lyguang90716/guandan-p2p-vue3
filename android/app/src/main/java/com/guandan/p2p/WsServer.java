@@ -14,14 +14,16 @@ import java.util.Collections;
 import java.util.Enumeration;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Native WebSocket server (host side) for the LAN P2P game.
  *
  * - Listens on 0.0.0.0:8848 (or the port passed in)
  * - Maintains a (WebSocket -> seat) map
- * - Exposes sendToClient / broadcast
- * - Forwards onOpen / onClose / onMessage back to the web layer via WsServerPlugin listeners
+ * - Exposes sendToClient / broadcast / bindSeat
+ * - Forwards onOpen / onClose / onMessage back to the web layer via WsServerPlugin listeners,
+ *   with a per-connection connId so the JS layer can later call bindSeat({connId, seat})
  *
  * This is the Java counterpart of the JS WebSocketTransport / src/common/network-transport-ws.js
  * used in the v1.0 browser version with the 'ws' npm package. On Android we cannot use 'ws',
@@ -33,14 +35,24 @@ public class WsServer extends WebSocketServer {
     private final Map<Integer, WebSocket> seatMap = new ConcurrentHashMap<>();
     /** WebSocket -> seat inverse map (used for fast lookup on close). */
     private final Map<WebSocket, Integer> connMap = new ConcurrentHashMap<>();
+    /**
+     * Per-connection stable integer ID, monotonically increasing from 1.
+     * Assigned at onOpen, exposed to the JS layer via 'clientConnected' and
+     * 'message' events so the JS layer can later call bindSeat({connId, seat}).
+     */
+    private final AtomicInteger nextConnId = new AtomicInteger(1);
+    /** connId -> WebSocket, used by plugin.bindSeat to resolve connId back to conn. */
+    private final Map<Integer, WebSocket> connIdMap = new ConcurrentHashMap<>();
+    /** WebSocket -> connId inverse, used for fast cleanup on close. */
+    private final Map<WebSocket, Integer> idOfConn = new ConcurrentHashMap<>();
 
     /** callback hooks — set by WsServerPlugin */
     private EventListener listener;
 
     public interface EventListener {
-        void onClientConnected(WebSocket conn, int assignedSeat);
-        void onClientDisconnected(WebSocket conn, int seat);
-        void onClientMessage(WebSocket conn, int seat, String message);
+        void onClientConnected(WebSocket conn, int assignedSeat, int connId);
+        void onClientDisconnected(WebSocket conn, int seat, int connId);
+        void onClientMessage(WebSocket conn, int seat, int connId, String message);
     }
 
     public WsServer(int port) {
@@ -72,22 +84,29 @@ public class WsServer extends WebSocketServer {
     @Override
     public void onOpen(WebSocket conn, ClientHandshake handshake) {
         // Assign a temporary seat = -1 (host will allocate proper seat on JOIN)
+        // Also assign a stable connId so the JS layer can later bind this conn to a real seat.
+        int connId = nextConnId.getAndIncrement();
+        connIdMap.put(connId, conn);
+        idOfConn.put(conn, connId);
         connMap.put(conn, -1);
         seatMap.put(-1, conn);
-        if (listener != null) listener.onClientConnected(conn, -1);
+        if (listener != null) listener.onClientConnected(conn, -1, connId);
     }
 
     @Override
     public void onClose(WebSocket conn, int code, String reason, boolean remote) {
+        Integer connId = idOfConn.remove(conn);
+        if (connId != null) connIdMap.remove(connId);
         Integer seat = connMap.remove(conn);
         if (seat != null) seatMap.remove(seat);
-        if (listener != null) listener.onClientDisconnected(conn, seat != null ? seat : -1);
+        if (listener != null) listener.onClientDisconnected(conn, seat != null ? seat : -1, connId != null ? connId : -1);
     }
 
     @Override
     public void onMessage(WebSocket conn, String message) {
         Integer seat = connMap.get(conn);
-        if (listener != null) listener.onClientMessage(conn, seat != null ? seat : -1, message);
+        Integer connId = idOfConn.get(conn);
+        if (listener != null) listener.onClientMessage(conn, seat != null ? seat : -1, connId != null ? connId : -1, message);
     }
 
     @Override
@@ -105,6 +124,22 @@ public class WsServer extends WebSocketServer {
     public void stop(int timeout) throws InterruptedException {
         listening = false;
         super.stop(timeout);
+    }
+
+    /**
+     * Bind a connection (looked up by connId from a prior clientConnected or message event)
+     * to a real seat. Thread-safe via ConcurrentHashMap.
+     *
+     * @param connId  the stable per-connection id emitted in clientConnected/message events
+     * @param seat    the seat to assign (>=0; seat=-1 not allowed here)
+     * @return true if the connId was found and the bind succeeded; false otherwise
+     */
+    public boolean bindSeatById(int connId, int seat) {
+        if (seat < 0) return false;
+        WebSocket conn = connIdMap.get(connId);
+        if (conn == null) return false;
+        bindSeat(conn, seat);
+        return true;
     }
 
     /**

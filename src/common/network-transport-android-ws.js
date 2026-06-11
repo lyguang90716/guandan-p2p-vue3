@@ -47,7 +47,8 @@ export class AndroidWsTransport {
     this._outbox = []        // ready 之前的消息队列
     this._ready = false
     this._hostIp = null      // host 启动后从 plugin.getLocalIp 拿到的实际 IP
-    this._lastSenderSeat = -1 // host 端最近一次收到消息的 seat (用于 bindLastSenderSeat)
+    this._lastSenderSeat = -1 // host 端最近一次收到消息的 seat (调试用)
+    this._lastSenderConnId = -1 // host 端最近一次收到消息的 conn 稳定 ID (用于 bindSeat)
     this._listenersHandle = [] // plugin addListener 句柄,用于 close 时清理
   }
 
@@ -77,8 +78,8 @@ export class AndroidWsTransport {
 
     // 2) 订阅 plugin 事件 → 转发给 network.js
     const offConn = await WsServer.addListener('clientConnected', (data) => {
-      // data.seat === -1 表示未分配 seat;network.js 处理 JOIN 时会通过
-      // bindLastSenderSeat 告知我们真正的 seat
+      // data.seat === -1 表示未分配 seat;data.connId 是稳定 conn 标识。
+      // network.js 处理 JOIN 时会通过 bindLastSenderSeat 告知真正的 seat。
       this._lastSenderSeat = -1
       // 不在此处 emit _DISCONNECT,留到 bindLastSenderSeat 流程结束后
     })
@@ -88,8 +89,10 @@ export class AndroidWsTransport {
     })
     const offMsg = await WsServer.addListener('message', (data) => {
       const seat = (data && typeof data.seat === 'number') ? data.seat : -1
+      const connId = (data && typeof data.connId === 'number') ? data.connId : -1
       const raw = (data && typeof data.message === 'string') ? data.message : ''
       this._lastSenderSeat = seat
+      this._lastSenderConnId = connId
       try {
         const msg = JSON.parse(raw)
         this._emit(msg)
@@ -199,10 +202,18 @@ export class AndroidWsTransport {
     }
   }
 
-  /** Host:把最近一次收到消息的 seat 绑定到指定 seat (network.js 处理完 JOIN 后调用) */
+  /**
+   * Host:把最近一次收到消息的 conn 绑定到指定 seat (network.js 处理完 JOIN 后调用)
+   * t2.1: 真正调 WsServer.bindSeat plugin,这样后续 sendToClient(seat, msg) 才能正确路由。
+   * @note 失败时(例如 plugin 调用抛错或 connId 已无效)静默忽略 — 已绑定的 seat 不影响。
+   */
   bindLastSenderSeat(seat) {
     if (this._mode !== 'self') return
     this._lastSenderSeat = seat
+    if (this._lastSenderConnId < 0) return
+    WsServer.bindSeat({ connId: this._lastSenderConnId, seat }).catch((e) => {
+      // swallow: 上层 sendToClient 会因 seatMap 仍 -1 而失败,但不破坏 host 自身状态
+    })
   }
 
   /** Host:手动断开指定 seat (v1 no-op,见文件头注释) */
@@ -229,6 +240,7 @@ export class AndroidWsTransport {
     this._listeners = []
     this._mode = null
     this._lastSenderSeat = -1
+    this._lastSenderConnId = -1
   }
 
   onMessage(cb) {

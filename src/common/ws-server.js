@@ -25,16 +25,25 @@ import { registerPlugin } from '@capacitor/core'
 
 /** @type {WsServerPlugin} */
 const WsServer = registerPlugin('WsServer', {
-  web: () => ({
-    // Browser fallback — we never run the host side in browser; if a caller
-    // accidentally invokes WsServer.startServer() in a dev environment, throw.
-    startServer: async () => { throw new Error('WsServer.startServer is Android-only') },
-    stopServer: async () => ({ ok: true }),
-    getLocalIp: async () => ({ ip: '127.0.0.1' }),
-    sendToClient: async () => ({ ok: false, sent: false }),
-    broadcast: async () => ({ ok: true, sent: 0 }),
-    addListener: async () => ({ remove: async () => {} }),
-  }),
+  web: () => {
+    // 测试钩子:如果 globalThis.__wsServerTestLog 存在,所有调用都 push 进去(用于 Node 单测)
+    const log = (typeof globalThis !== 'undefined' && globalThis.__wsServerTestLog) || null
+    const make = (m, ret) => async (opts) => {
+      if (log) log.push({ m, opts })
+      return ret
+    }
+    return {
+      // Browser fallback — we never run the host side in browser; if a caller
+      // accidentally invokes WsServer.startServer() in a dev environment, throw.
+      startServer: async () => { throw new Error('WsServer.startServer is Android-only') },
+      stopServer: async (opts) => { if (log) log.push({ m: 'stopServer', opts }); return { ok: true } },
+      getLocalIp: async () => ({ ip: '127.0.0.1' }),
+      sendToClient: make('sendToClient', { ok: false, sent: false }),
+      broadcast: make('broadcast', { ok: true, sent: 0 }),
+      bindSeat: make('bindSeat', { ok: true, bound: true }),
+      addListener: async () => ({ remove: async () => {} }),
+    }
+  },
 })
 
 /**

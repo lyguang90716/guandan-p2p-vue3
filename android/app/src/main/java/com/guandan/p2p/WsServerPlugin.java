@@ -64,15 +64,17 @@ public class WsServerPlugin extends Plugin {
             server = new WsServer(port);
             server.setEventListener(new WsServer.EventListener() {
                 @Override
-                public void onClientConnected(WebSocket conn, int assignedSeat) {
+                public void onClientConnected(WebSocket conn, int assignedSeat, int connId) {
                     JSObject data = new JSObject();
                     data.put("seat", assignedSeat);
+                    data.put("connId", connId);
                     notifyListeners("clientConnected", data);
                 }
                 @Override
-                public void onClientDisconnected(WebSocket conn, int seat) {
+                public void onClientDisconnected(WebSocket conn, int seat, int connId) {
                     JSObject data = new JSObject();
                     data.put("seat", seat);
+                    data.put("connId", connId);
                     notifyListeners("clientDisconnected", data);
                     if (seat >= 1 && seat <= 3) {
                         // release seat for re-allocation
@@ -82,9 +84,10 @@ public class WsServerPlugin extends Plugin {
                     }
                 }
                 @Override
-                public void onClientMessage(WebSocket conn, int seat, String message) {
+                public void onClientMessage(WebSocket conn, int seat, int connId, String message) {
                     JSObject data = new JSObject();
                     data.put("seat", seat);
+                    data.put("connId", connId);
                     data.put("message", message);
                     notifyListeners("message", data);
                 }
@@ -146,29 +149,26 @@ public class WsServerPlugin extends Plugin {
     }
 
     /**
-     * Bind a connection (by current temp seat = -1) to a real seat number.
-     * Called by the web layer after processing JOIN.
-     * @param call {connId?: number, seat: number}
+     * Bind a connection (looked up by the stable connId from prior
+     * 'clientConnected' or 'message' events) to a real seat number.
+     * Called by the web layer after processing a JOIN message.
      *
-     * Note: in v1 we use the seat field emitted in 'clientConnected' as a
-     * transient token (it's -1 until bound, then the real seat). The web layer
-     * tracks open connections by their seat field on the 'clientConnected' event.
+     * @param call {connId: number, seat: number}
+     * @note t2.1: previously a no-op; now actually binds the conn to seatMap
+     *       so that subsequent sendToClient({seat, message}) can route correctly.
      */
     @PluginMethod
     public void bindSeat(PluginCall call) {
         if (server == null) { call.reject("server not running"); return; }
+        Integer connId = call.getInt("connId", -1);
         Integer seat = call.getInt("seat", -1);
+        if (connId == null || connId < 0) { call.reject("invalid connId"); return; }
         if (seat == null || seat < 0) { call.reject("invalid seat"); return; }
-        // For v1 the web layer's transport maintains its own ws -> seat map, so
-        // we just need to remember the seat assignment for routing purposes.
-        // The actual bind happens via the WsServer.bindSeat() call when the
-        // web layer sends back the assigned seat. The plugin will look up the
-        // WebSocket by the most-recent 'clientConnected' (or 'message') event.
-        // To keep things simple in v1, the web layer uses seat -1 as the
-        // "not yet assigned" marker and the real seat comes from the host logic.
-        // bindSeat is a no-op for the v1 flow; routing uses broadcast/sendToClient.
+        boolean bound = server.bindSeatById(connId, seat);
         JSObject ret = new JSObject();
-        ret.put("ok", true);
+        ret.put("ok", bound);
+        ret.put("bound", bound);
+        if (!bound) ret.put("error", "connId " + connId + " not found");
         call.resolve(ret);
     }
 
