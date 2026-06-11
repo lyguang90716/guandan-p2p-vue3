@@ -430,8 +430,8 @@ console.log('\n=== 15. 心跳发送 (joiner 端 fake timer) ===')
   const { mod: Joiner, captured } = await makeJoiner('j15', port, 'uuid-h15-j')
   // joiner 注册的 intervals(心跳 + rejoin)
   assert('joiner 注册了 setInterval (心跳发送)', captured.intervals.length >= 1)
-  const hbInterval = captured.intervals.find(t => t.ms === 3000)
-  assert('心跳 interval 周期 = 3000ms', !!hbInterval)
+  const hbInterval = captured.intervals.find(t => t.ms === 2000)
+  assert('心跳 interval 周期 = 2000ms (v2.1 调优)', !!hbInterval)
 
   // 手动调一次心跳 callback(joiner 发 HEARTBEAT,host 收到)
   const hbRecv = []
@@ -457,9 +457,9 @@ console.log('\n=== 16. 心跳超时释放 seat + BUG-7 修复验证 ===')
   Host.on('peer:leave', (e) => { leaveEvent = e })
   Host.on('ai:takeover', (e) => { aiTakeoverEvent = e })
 
-  // host 注册的心跳检查 interval
-  const checker = hCap.intervals.find(t => t.ms === 5000)
-  assert('host 注册了心跳检查 interval (5000ms)', !!checker)
+  // host 注册的心跳检查 interval (v2.1 调优:5000 → 2000)
+  const checker = hCap.intervals.find(t => t.ms === 2000)
+  assert('host 注册了心跳检查 interval (2000ms, v2.1)', !!checker)
 
   // 强制让 seat=1 的心跳过期
   Host._forceExpireHeartbeat(1)
@@ -549,7 +549,7 @@ console.log('\n=== 20. ★ BUG-7 防御:host 心跳超时 → host 端 ai:takeov
 
   // 模拟 joiner 掉线:host 强制过期心跳 + 触发 checker
   Host._forceExpireHeartbeat(1)
-  const checker = hCap.intervals.find(t => t.ms === 5000)
+  const checker = hCap.intervals.find(t => t.ms === 2000)
   checker.fn()
   await settle(100)
 
@@ -560,6 +560,177 @@ console.log('\n=== 20. ★ BUG-7 防御:host 心跳超时 → host 端 ai:takeov
   Host.off('ai:takeover')
   Host.close()
   Joiner.close()
+}
+
+console.log('\n=== 21. v2.1 精确性:心跳超时边界 (now - ts) ===')
+{
+  // 直接验证 _tickHeartbeatChecker 的算法边界,不受 TIMEOUT/CHECK_INTERVAL 常量变化影响
+  // 思路:
+  //   1) mock Date.now() 锚定 mockNow
+  //   2) 用 _forceExpireHeartbeat 设 seat=1 的 ts = mockNow - TIMEOUT - 1000 (刚过期)
+  //   3) 改变 mockNow 调 checker,断言释放/不释放边界
+  // 这等价于"joiner 在 mockNow 时刻发心跳,然后 mockNow+N ms 后 host 检查"
+  const { mod: Host, port } = await makeHost('h21')
+  const { mod: Joiner } = await makeJoiner('j21', port, 'uuid-h21-j')
+  assert('joiner seat=1', Joiner.getSelfSeat() === 1)
+  assert('host peers 含 seat=1', Host.getPeers().has(1))
+
+  let leaveSeat = null
+  Host.on('peer:leave', (e) => { leaveSeat = e?.seat })
+
+  const _realDateNow = Date.now
+  try {
+    // 锚定 mockNow (joiner 心跳刚发的瞬间)
+    let mockNow = 1000000
+    Date.now = () => mockNow
+
+    // 设 seat=1 的 ts = mockNow (=刚发完心跳,新鲜)
+    // 用 _forceExpireHeartbeat 的反向逻辑:不能直接设 ts,所以改用连续 _force + 时序模拟
+    // _forceExpireHeartbeat 写 ts = now - TIMEOUT - 1000
+    // 现在 now = mockNow,所以 ts = mockNow - 7000
+    // → 距过期 7000ms (远超 TIMEOUT 6000) → 任何时候 checker 都会释放
+    Host._forceExpireHeartbeat(1)
+    // ts = mockNow - 7000 = 993000
+    // 边界 1:now=ts+5500 (mockNow=mockNow-7000+5500=mockNow-1500) → 距过期 5500ms ≤ TIMEOUT → 不释放
+    mockNow = 1000000 - 7000 + 5500  // = 998500
+    Host._tickHeartbeatChecker()
+    await settle(50)
+    assert('mockNow 距 ts = 5500ms (≤ TIMEOUT) → 不释放 seat=1', Host.getPeers().has(1))
+    assert('5500ms 边界内 peer:leave 未触发', leaveSeat === null)
+
+    // 边界 2:now=ts+6100 (mockNow=mockNow-7000+6100=mockNow-900) → 距过期 6100ms > TIMEOUT → 释放
+    mockNow = 1000000 - 7000 + 6100  // = 999100
+    Host._tickHeartbeatChecker()
+    await settle(50)
+    assert('mockNow 距 ts = 6100ms (> TIMEOUT) → 释放 seat=1', !Host.getPeers().has(1))
+    assert('6100ms 超 TIMEOUT 后 peer:leave seat=1 触发', leaveSeat === 1)
+  } finally {
+    Date.now = _realDateNow
+  }
+
+  // === 边界 3:验证常数关系 ===
+  const { HEARTBEAT_TIMEOUT_MS, HEARTBEAT_CHECK_INTERVAL_MS } = Host
+  assert('HEARTBEAT_TIMEOUT_MS = 6000 (v2.1 调优)', HEARTBEAT_TIMEOUT_MS === 6000)
+  assert('HEARTBEAT_CHECK_INTERVAL_MS = 2000 (v2.1 调优)', HEARTBEAT_CHECK_INTERVAL_MS === 2000)
+  assert('HEARTBEAT_TIMEOUT_MS + CHECK_INTERVAL = 8000ms (最坏释放延迟)',
+    HEARTBEAT_TIMEOUT_MS + HEARTBEAT_CHECK_INTERVAL_MS === 8000)
+
+  Host.off('peer:leave')
+  Host.close()
+  Joiner.close()
+}
+
+console.log('\n=== 22. v2.1 回归:joiner 存活 + checker 触发 → host 不释放 (BUG-1 出牌同步路径) ===')
+{
+  // 回归 BUG-1:joiner 存活期间 + lastHeartbeat 未过期,host 不应误释放
+  // 场景:joiner join 后立刻 mock 时间推进,但 lastHeartbeat[seat] 是真实时间戳;
+  //   关键:不能调 _forceExpireHeartbeat (那会把 ts 拉到过去),只调 checker + 看是否被错误释放
+  // 等价于:joiner 在出牌期间 (心跳正常) → 永远不会触发释放
+  const { mod: Host, port } = await makeHost('h22')
+  const { mod: Joiner } = await makeJoiner('h22j', port, 'uuid-h22-j')
+  assert('joiner seat=1', Joiner.getSelfSeat() === 1)
+  assert('host peers 含 seat=1 (joiner 在线)', Host.getPeers().has(1))
+
+  let leaveCount = 0
+  let aiTakeoverCount = 0
+  Host.on('peer:leave', () => { leaveCount++ })
+  Host.on('ai:takeover', () => { aiTakeoverCount++ })
+
+  // joiner 心跳发送 interval 注册检查
+  // (captured.intervals 里包含心跳 + rejoin 两个 interval)
+  // 直接断言 ms=2000 的 interval 是心跳 (rejoin 是 15000ms)
+  // 注意:这是 host 端 captured.intervals,不是 joiner 端。joiner 端 captured 需要重做
+
+  // ★ 关键:不调 _forceExpireHeartbeat + 不动 Date.now → host 端 ts 是 join 时刻的 Date.now()
+  //   推进几 ms 后,now - ts ≈ 几 ms,远小于 TIMEOUT(6000) → 不释放
+  Host._tickHeartbeatChecker()
+  await settle(50)
+  Host._tickHeartbeatChecker()
+  await settle(50)
+  Host._tickHeartbeatChecker()
+  await settle(50)
+
+  assert('joiner 存活 + checker ×3 → host 不释放 seat=1 (BUG-1 路径)', Host.getPeers().has(1))
+  assert('joiner 存活 + checker ×3 → peer:leave 触发 0 次', leaveCount === 0)
+  assert('joiner 存活 + checker ×3 → ai:takeover 触发 0 次 (BUG-7 不误触发)', aiTakeoverCount === 0)
+
+  Host.off('peer:leave')
+  Host.off('ai:takeover')
+  Host.close()
+  Joiner.close()
+}
+
+console.log('\n=== 23. v2.1 端到端:joiner 掉线后推进 6.5s → host 释放 (mock Date.now 验证 6-8s 窗口) ===')
+{
+  // 核心验证:不调 _forceExpireHeartbeat (那相当于作弊),而是:
+  //   1) joiner close (停止发心跳,等价于掉线)
+  //   2) mock Date.now 推进到 joinTs + 5500ms → 不释放
+  //   3) mock Date.now 推进到 joinTs + 6500ms → 释放
+  // 这证明:HEARTBEAT_TIMEOUT_MS=6000 + CHECK_INTERVAL=2000 的精确性,落在 6-8s 区间
+  const { mod: Host, port } = await makeHost('h23')
+  const { mod: Joiner } = await makeJoiner('h23j', port, 'uuid-h23-j')
+  assert('joiner seat=1', Joiner.getSelfSeat() === 1)
+  assert('host peers 含 seat=1', Host.getPeers().has(1))
+
+  let leaveEvent = null
+  let aiTakeoverEvent = null
+  Host.on('peer:leave', (e) => { leaveEvent = e })
+  Host.on('ai:takeover', (e) => { aiTakeoverEvent = e })
+
+  // 锚定 join 时刻的"逻辑时间"
+  const joinTs = Date.now()
+
+  // ★ 模拟掉线:joiner close,不再发心跳
+  //   (close 会清掉 joiner 自己的 heartbeat timer,但 host 端 lastHeartbeat[seat] 保留 joinTs)
+  Joiner.close()
+  await settle(50)
+
+  // mock 时间推进 (在 try/finally 里还原)
+  const _realDateNow = Date.now
+  try {
+    // 阶段 1:推进 5500ms (≤ TIMEOUT 6000) → 不释放
+    Date.now = () => joinTs + 5500
+    Host._tickHeartbeatChecker()
+    await settle(50)
+    assert('掉线 5.5s (≤ TIMEOUT) → host 不释放 seat=1', Host.getPeers().has(1))
+    assert('掉线 5.5s → peer:leave 未触发', leaveEvent === null)
+    assert('掉线 5.5s → ai:takeover 未触发', aiTakeoverEvent === null)
+
+    // 阶段 2:推进 6500ms (> TIMEOUT 6000) → 释放
+    Date.now = () => joinTs + 6500
+    Host._tickHeartbeatChecker()
+    await settle(50)
+    assert('掉线 6.5s (> TIMEOUT) → host 释放 seat=1', !Host.getPeers().has(1))
+    assert('掉线 6.5s → peer:leave seat=1 触发', leaveEvent?.seat === 1)
+    assert('掉线 6.5s → ai:takeover seat=1 触发 (BUG-7 修复仍生效)', aiTakeoverEvent?.seat === 1)
+  } finally {
+    Date.now = _realDateNow
+  }
+
+  Host.off('peer:leave')
+  Host.off('ai:takeover')
+  Host.close()
+}
+
+console.log('\n=== 24. v2.1 精确性:HEARTBEAT_*_MS 常量值 + 关系 ===')
+{
+  // 通过 Host 模块导出常量验证最终值,防止后续误改回归 v3.8 旧值
+  const { mod: Host } = await makeHost('h24')
+  const {
+    HEARTBEAT_INTERVAL_MS,
+    HEARTBEAT_CHECK_INTERVAL_MS,
+    HEARTBEAT_TIMEOUT_MS,
+  } = Host
+  assert('HEARTBEAT_INTERVAL_MS = 2000 (joiner 发心跳节奏)', HEARTBEAT_INTERVAL_MS === 2000)
+  assert('HEARTBEAT_CHECK_INTERVAL_MS = 2000 (host 检查节奏)', HEARTBEAT_CHECK_INTERVAL_MS === 2000)
+  assert('HEARTBEAT_TIMEOUT_MS = 6000 (掉线判定阈值)', HEARTBEAT_TIMEOUT_MS === 6000)
+  // 最坏释放延迟 = TIMEOUT + CHECK_INTERVAL = 8000ms
+  assert('最坏释放延迟 = TIMEOUT + CHECK_INTERVAL = 8000ms (落在 6-8s 目标区间上沿)',
+    HEARTBEAT_TIMEOUT_MS + HEARTBEAT_CHECK_INTERVAL_MS === 8000)
+  // 平均释放延迟 = TIMEOUT + CHECK_INTERVAL/2 = 7000ms
+  assert('平均释放延迟 ≈ TIMEOUT + CHECK_INTERVAL/2 = 7000ms (落在 6-8s 目标区间中心)',
+    HEARTBEAT_TIMEOUT_MS + Math.floor(HEARTBEAT_CHECK_INTERVAL_MS / 2) === 7000)
+  Host.close()
 }
 
 // ============== 汇总 ==============

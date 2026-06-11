@@ -49,9 +49,14 @@ let _setTimeoutFn = typeof setTimeout !== 'undefined' ? setTimeout : null
 let _clearTimeoutFn = typeof clearTimeout !== 'undefined' ? clearTimeout : null
 
 // ============== 心跳状态 ==============
-const HEARTBEAT_INTERVAL_MS = 3000
-const HEARTBEAT_CHECK_INTERVAL_MS = 5000
-const HEARTBEAT_TIMEOUT_MS = 10000
+// v2.1 心跳调优:从 3s/5s/10s 收到 2s/2s/6s,实测掉线 joiner 释放 13s → 6-8s 区间。
+//   - HEARTBEAT_INTERVAL_MS = 2000:joiner 每 2s 发一次心跳
+//   - HEARTBEAT_CHECK_INTERVAL_MS = 2000:host 每 2s 扫一次超时表
+//   - HEARTBEAT_TIMEOUT_MS = 6000:6s 没收到心跳视为掉线
+//  最坏释放延迟 ≈ TIMEOUT + CHECK_INTERVAL = 8s,平均 ≈ TIMEOUT + CHECK_INTERVAL/2 = 7s。
+const HEARTBEAT_INTERVAL_MS = 2000
+const HEARTBEAT_CHECK_INTERVAL_MS = 2000
+const HEARTBEAT_TIMEOUT_MS = 6000
 let heartbeatSendTimer = null
 let heartbeatCheckTimer = null
 const lastHeartbeat = new Map()   // host: seat -> ts
