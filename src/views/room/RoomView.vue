@@ -81,17 +81,19 @@
         <span class="info-room-num">{{ roomNo }}</span>
       </div>
       <!-- v2.0 改造:host 端展示本机 IP + 端口 + 二维码 (扫码加入) -->
+      <!-- v2.2 task A:QR fallback 卡片永远显示作为兜底 (qr 失败时尤其重要) -->
       <div v-if="isHost" class="host-info">
         <div class="host-info-row">
           <span class="host-info-label">本机 IP</span>
           <span class="host-info-value">{{ hostIp || '加载中…' }}</span>
           <span class="host-info-port">:{{ hostPort }}</span>
         </div>
-        <div class="host-info-qr" v-if="qrDataUrl">
-          <img :src="qrDataUrl" alt="QR" class="qr-img" />
-          <p class="host-info-hint">扫码 / 输 IP:端口 加入</p>
-        </div>
-        <div v-else-if="!qrLibOk" class="host-info-hint qr-missing">未装 qrcode 库,展示纯文本地址</div>
+        <QrFallbackCard
+          :host-ip="hostIp"
+          :host-port="hostPort"
+          :qrcode-url="qrDataUrl"
+          @copied="onCopied"
+        />
       </div>
       <div class="info-row">
         <div class="info-cell">
@@ -134,6 +136,9 @@
       @close="showNickEditor = false"
       @confirm="onNickConfirm"
     />
+
+    <!-- ★ v2.2 task A:复制 IP 后的 toast 提示(替代 alert) -->
+    <div v-if="copyToast" class="copy-toast" role="status">{{ copyToast }}</div>
   </div>
 </template>
 
@@ -144,6 +149,7 @@ import storage from '@/common/storage.js'
 import net from '@/common/network.js'
 import WsServer, { isNativeCapacitor } from '@/common/ws-server.js'
 import NicknameEditor from '@/components/NicknameEditor.vue'
+import QrFallbackCard from '@/components/QrFallbackCard.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -326,7 +332,10 @@ onMounted(() => {
 // 之前 unmount 关 network,joiner 收到 GAME_START 跳 /game 时 channel 就关了,
 // 后续 host 广播的 DEAL/PLAY/PASS 全部丢失,4-tab 联机出牌同步失效
 // network 在以下时机关:用户点"退出"返回 /、手动点"断开连接"、应用关闭
-onUnmounted(() => {})
+onUnmounted(() => {
+  // ★ v2.2 task A:清理 copy toast timer
+  if (_copyToastTimer) clearTimeout(_copyToastTimer)
+})
 
 function showMenu() {
   if (confirm('退出房间?')) router.push('/')
@@ -356,6 +365,22 @@ function onInvite() {
       () => alert(`房间号: ${roomNo.value}`)
     )
   }
+}
+
+// ★ v2.2 task A:QrFallbackCard 复制回调 → 写剪贴板 + 弹"已复制"toast(原 onInvite 用 alert,体验差)
+const copyToast = ref('')
+let _copyToastTimer = null
+function onCopied(text) {
+  if (!text) return
+  navigator.clipboard.writeText(text).then(
+    () => showCopyToast(`已复制 ${text}`),
+    () => showCopyToast(`复制失败,IP: ${text}`)
+  )
+}
+function showCopyToast(msg) {
+  copyToast.value = msg
+  if (_copyToastTimer) clearTimeout(_copyToastTimer)
+  _copyToastTimer = setTimeout(() => { copyToast.value = '' }, 1800)
 }
 function onToggleReady() {
   myReady.value = !myReady.value
@@ -642,4 +667,28 @@ function onKickPlayer(seat) {
 }
 .suit { font-size: 36px; color: rgba(255,255,255,0.7); cursor: pointer; }
 .suit.active { color: #ffeb3b; transform: scale(1.3); }
+
+/* ★ v2.2 task A:copy toast — 屏幕底部居中,1.8s 自动消失 */
+.copy-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 80px;
+  transform: translateX(-50%);
+  background: rgba(0,0,0,0.78);
+  color: #fff;
+  font-size: 13px;
+  font-weight: bold;
+  padding: 8px 16px;
+  border-radius: 18px;
+  z-index: 100;
+  pointer-events: none;
+  white-space: nowrap;
+  animation: copy-toast-fade 1.8s ease-in-out forwards;
+}
+@keyframes copy-toast-fade {
+  0% { opacity: 0; transform: translateX(-50%) translateY(8px); }
+  10% { opacity: 1; transform: translateX(-50%) translateY(0); }
+  85% { opacity: 1; }
+  100% { opacity: 0; transform: translateX(-50%) translateY(-4px); }
+}
 </style>
