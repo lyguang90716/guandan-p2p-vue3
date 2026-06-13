@@ -19,6 +19,7 @@ import { registerPlugin } from '@capacitor/core'
  * @property {() => Promise<{ip: string}>} getLocalIp
  * @property {(opts: {seat: number, message: string}) => Promise<{ok: boolean, sent: boolean}>} sendToClient
  * @property {(opts: {message: string}) => Promise<{ok: boolean, sent: number}>} broadcast
+ * @property {(opts: {seat: number}) => Promise<{ok: boolean}>} closeClient  // v2.1 P1:host 主动踢人
  * @property {(event: 'clientConnected' | 'clientDisconnected' | 'message', handler: Function) => Promise<any>} addListener
  * @property {(event: string, handler: Function) => Promise<any>} removeListener
  */
@@ -41,6 +42,7 @@ const WsServer = registerPlugin('WsServer', {
       sendToClient: make('sendToClient', { ok: false, sent: false }),
       broadcast: make('broadcast', { ok: true, sent: 0 }),
       bindSeat: make('bindSeat', { ok: true, bound: true }),
+      closeClient: make('closeClient', { ok: true }),  // v2.1 P1:测试环境默认 no-op-success
       addListener: async () => ({ remove: async () => {} }),
     }
   },

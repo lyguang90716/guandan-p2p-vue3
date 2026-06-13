@@ -204,17 +204,48 @@ export class WebSocketTransport {
   }
 
   /**
-   * Host：手动把指定 seat 标记为断开（network.js 在 HEARTBEAT_TIMEOUT 时调用，
-   * 关掉对应的 ws 连接、释放 seat 映射）。
+   * Host:主动断开指定 seat (v2.1 P1 host 主动踢人)。
+   *
+   * 真做机制 (2 步):
+   *   1. 找到 seat 绑定的 ws,立即从 _clients map 删除(防止后续 sendToClient 路由到死连接)
+   *   2. ws.close() —— server 端关闭连接,joiner 端 ws.on('close') 会触发 _DISCONNECT
+   *
+   * v2.1 owner steer 修正:**不**通过 _DISCONNECT 立即清 host peers Map / lastHeartbeat / aiPlayers。
+   *   - 保留 v2.1 心跳 6-8s 路径,host 端 peers 释放由 _tickHeartbeatChecker 在 6s 后处理
+   *   - 立即 UI 反馈由调用方 (RoomView) 同步改自己的 reactive peers Map (UI 状态,跟 network.js 内部 Map 隔离)
+   *   - 其他 joiner 端:从 host 的 PEER_LEAVE 广播(或自己 ws.on('close'))收到通知
+   *
+   * 广播 PEER_LEAVE { kick: true } 走 WS send 路径(此处用 transport.send 把 PEER_LEAVE 注入网络),
+   *   实际上 v2.1 走 ws.on('close') 触发 clientDisconnected → _tickHeartbeatChecker → broadcast PEER_LEAVE,
+   *   joiner 端 6-8s 后收到 PEER_LEAVE。为了让 joiner 立即被踢,在 ws.close() 同时我们也 broadcast PEER_LEAVE { kick: true }
+   *
+   * 返回 true = 找到并踢了;false = 没找到。
    */
   forceDisconnectSeat(seat) {
-    if (this._mode !== 'self') return
+    if (this._mode !== 'self') return false
+    let target = null
     for (const ws of this._clients.keys()) {
-      if (ws._seat === seat) {
-        try { ws.close() } catch (e) { /* swallow */ }
-        return
+      if (ws._seat === seat) { target = ws; break }
+    }
+    if (!target) return false
+    // 1) 立即从 _clients 移除 — 防止后续 sendToClient 路由到死连接
+    this._clients.delete(target)
+    // 2) broadcast PEER_LEAVE { kick: true } 给其它 joiner,让被踢的人立即跳 /?force_disconnected=1
+    //    (kick=true 标识"主动踢"vs "网络掉线")
+    const data = JSON.stringify({
+      type: 'PEER_LEAVE',
+      payload: { seat, kick: true, reason: 'kicked' },
+      from: 0,
+      ts: Date.now(),
+    })
+    for (const ws of this._clients.keys()) {
+      if (ws.readyState === 1) {
+        try { ws.send(data) } catch (e) { /* swallow */ }
       }
     }
+    // 3) 关连接(joiner 端 ws.on('close') 触发 _DISCONNECT — 仅 transport 内部信号,不动 host peers)
+    try { target.close() } catch (e) { /* swallow */ }
+    return true
   }
 
   close() {

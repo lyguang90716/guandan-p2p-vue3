@@ -1,28 +1,28 @@
 /**
  * AndroidWsTransport —— 真机 / Capacitor WebView 用
  *
- * 与 src/common/network-transport-ws.js (浏览器版，用 'ws' npm) 接口完全一致。
- * 实现差异：
- *   - Host：把 server 部分 delegate 给原生 WsServer Capacitor 插件
- *     (Java-WebSocket 1.5.4, WsServer.java)。本地不持有 socket 列表，
+ * 与 src/common/network-transport-ws.js (浏览器版,用 'ws' npm) 接口完全一致。
+ * 实现差异:
+ *   - Host:把 server 部分 delegate 给原生 WsServer Capacitor 插件
+ *     (Java-WebSocket 1.5.4, WsServer.java)。本地不持有 socket 列表,
  *     send 走 plugin.sendToClient / plugin.broadcast。
  *   - Client (joiner): WebView 自带 WebSocket 全局,直接 new WebSocket(url)。
  *   - 收到消息:Host 侧 plugin 'message' 事件携带 seat+text;
  *     Client 侧 WebSocket onmessage 携带 Event.data (text)。
  *
- * 消息格式：{type, payload, from, to?, ts} —— 跟 BC / 浏览器 WS 模式完全一致。
+ * 消息格式:{type, payload, from, to?, ts} —— 跟 BC / 浏览器 WS 模式完全一致。
  *
  * 异步 open:
  *   - open('self'): 等 WsServer.startServer() resolve 才返回
  *   - open('client', hostIp, hostPort): 等 WebSocket onopen 才返回
- *   - send() 在 ready 之前会被缓存，open 成功后 flush
+ *   - send() 在 ready 之前会被缓存,open 成功后 flush
  *
  * bindLastSenderSeat / forceDisconnectSeat:
- *   - Host: plugin 没有给我们底层 WebSocket 句柄,无法 close 单个 seat;
- *     v1 实现 forceDisconnectSeat 是 no-op,改用 broadcast PEER_LEAVE 让
- *     joiner 自己断开 (host 自己的网络层会标记 seat 释放)。
- *   - 这种简化在 v1 是 OK 的:真机联机场景下 joiner 物理离开 = 拔 wifi,
- *     plugin 的 onClose 会发 'clientDisconnected',host 端自然清理 seat。
+ *   - Host: v2.1 P1 起 forceDisconnectSeat 真做 —— 调 WsServer.closeClient({ seat })
+ *     让 Java 侧 server 关掉对应 client 连接 + 同时 broadcast PEER_LEAVE { kick: true }
+ *     让 joiner 立即识别自己被踢 (而不是等 ws.onclose 异步触发)。
+ *   - v2.1 owner steer:**不**通过 _DISCONNECT 立即清 host peers Map / lastHeartbeat,
+ *     这些留给 _tickHeartbeatChecker 在 6s 后处理 (跟 BC / WS 路径对称,保留 v2.1 心跳路径)。
  */
 
 import WsServer, { isNativeCapacitor } from './ws-server.js'
@@ -216,11 +216,35 @@ export class AndroidWsTransport {
     })
   }
 
-  /** Host:手动断开指定 seat (v1 no-op,见文件头注释) */
+  /**
+   * Host:主动断开指定 seat (v2.1 P1 host 主动踢人)。
+   *
+   * 真做机制:
+   *   1. broadcast PEER_LEAVE { kick: true } 让被踢 joiner + 其它 joiner 立即收到通知
+   *      (其它 joiner 端正常 peers.delete + peer:leave;被踢的 joiner seat===selfSeat + kick
+   *       → network.js 触发 'self:kicked' 事件 → UI 跳 /?force_disconnected=1)
+   *   2. 调 WsServer.closeClient({ seat }) 让 Java 侧 server 关掉对应 client 连接
+   *      (joiner 端 _ws.onclose 异步触发,但被踢的 joiner 在 PEER_LEAVE 到达时已经跳页,
+   *       ws.onclose 只是清理 transport 内部状态)
+   *
+   * v2.1 owner steer:**不**通过 _DISCONNECT 立即清 host peers Map / lastHeartbeat —
+   *   host 端 seat 释放走 6-8s 心跳路径。host UI 立即反映由调用方 (RoomView) 改 reactive peers Map。
+   *
+   * 返回 true = 调了 plugin;false = 模式不对。
+   */
   forceDisconnectSeat(seat) {
-    if (this._mode !== 'self') return
-    // 不主动 close,因为 plugin 没暴露 ws 句柄;
-    // network.js 收到 disconnect 后会 broadcast PEER_LEAVE 让 joiner 端自行处理
+    if (this._mode !== 'self') return false
+    // 1) broadcast PEER_LEAVE { kick: true } 给所有 joiner (host 不接收自己的 broadcast)
+    const data = JSON.stringify({
+      type: 'PEER_LEAVE',
+      payload: { seat, kick: true, reason: 'kicked' },
+      from: 0,
+      ts: Date.now(),
+    })
+    WsServer.broadcast({ message: data }).catch(() => { /* swallow */ })
+    // 2) 关连接 (异步,fire-and-forget)
+    WsServer.closeClient({ seat }).catch(() => { /* swallow */ })
+    return true
   }
 
   async close() {

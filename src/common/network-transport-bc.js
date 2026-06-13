@@ -58,6 +58,36 @@ export class BroadcastChannelTransport {
     }
   }
 
+  /**
+   * Host: 主动断开指定 seat (v2.1 P1 host 主动踢人)。
+   *
+   * BC 路径没有"定向踢某个 client"的原语(BC 是广播的,不分听众)。
+   * 真做机制:
+   *   1. broadcast PEER_LEAVE { kick: true } 给所有其它 tab
+   *      - 被踢 joiner (seat===selfSeat && kick):network.js 触发 'self:kicked' 事件
+   *        → UI 跳 /?force_disconnected=1
+   *      - 其它 joiner:正常 peers.delete + peer:leave
+   *
+   * v2.1 owner steer:**不**通过 _DISCONNECT 立即清 host peers Map / lastHeartbeat —
+   *   host 端 seat 释放走 6-8s 心跳路径。host UI 立即反映由调用方 (RoomView) 改 reactive peers Map。
+   *
+   * 返回 true / false (仅表示调用是否合法,BC 模式 channel 已开就 true)
+   */
+  forceDisconnectSeat(seat) {
+    if (!this._channel) return false
+    try {
+      this._channel.postMessage({
+        type: 'PEER_LEAVE',
+        payload: { seat, kick: true, reason: 'kicked' },
+        from: 0, // host 是 seat=0
+        ts: Date.now(),
+      })
+    } catch (e) {
+      // swallow
+    }
+    return true
+  }
+
   close() {
     if (this._channel) {
       try { this._channel.close() } catch (e) { /* ignore */ }

@@ -345,9 +345,17 @@ function _handleJoinerMessage(msg) {
     emit('error', msg.payload?.reason || '房间已满')
   } else if (msg.type === 'PEER_LEAVE') {
     const seat = msg.payload?.seat
+    const kicked = msg.payload?.kick === true
     if (seat != null && peers.has(seat)) {
       peers.delete(seat)
       emit('peer:leave', { seat })
+    }
+    // ★ v2.1 P1 host 主动踢人:被踢的 joiner 自己跳到 /?force_disconnected=1
+    //   BC 路径:host broadcast PEER_LEAVE { kick: true, seat } → 只有被踢的 joiner 命中此分支
+    //   WS / AndroidWs 路径:joiner 端 ws.onclose → emit _DISCONNECT → 自己也会走 close 路径,
+    //                          但踢人消息走网络层更可靠 (即使 ws onclose 没及时触发也能 navigate)
+    if (kicked && seat === selfSeat) {
+      emit('self:kicked', { reason: msg.payload?.reason || 'kicked' })
     }
   } else if (msg.type === 'AI_TAKEOVER') {
     // ★ v2.0 BUG-7:joiner 端收到 AI_TAKEOVER → 触发本地 ai:takeover
