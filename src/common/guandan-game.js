@@ -279,6 +279,92 @@ function createGame(opts) {
     getAIPlayers() { return aiPlayers.slice() },
     // ★ v3.8 P1:AI 出的牌要广播(GameView 注入回调)
     setAIBroadcast(fn) { aiBroadcast = fn },
+    /**
+     * ★ v2.1 P3:host 退场 → 座位重映射 + 状态转移
+     *
+     * 触发:旧 host 走人(关 App / 断网 / 自己踢自己),某个 joiner 按"队友优先"
+     * 升级为新 host,接管牌局控制权。
+     *
+     * 重映射规则:
+     *   - hands[] 数组索引按"逻辑 seat 0/1/2/3"重新分配
+     *   - 新 host (oldSeat=newHostSeat) 的手牌 → 移动到 hands[0],他原 seat (newHostSeat) 的位置置空
+     *   - 旧 host (oldHostSeat=0) 的手牌 → 标记"弃牌"(加入 finishedOrder 尾,作最末位)
+     *   - 其他 joiner 的 hands[oldSeat] 保持不变(他们的 seat 不动)
+     *   - finishedOrder / levelRank / round / phase 保留(但旧 host 加到 finishedOrder 末位)
+     *
+     * 副作用:
+     *   - state.currentPlayer 调整:如果之前是旧 host 回合 → 切到新 host 回合(0 = new host)
+     *   - state.firstPlayer / leaderPlayer 调整:同上
+     *   - emit('host:migrated', { oldHostSeat, newHostSeat }) 让 UI 弹提示
+     *
+     * @param {number} oldHostSeat — 旧 host seat (这里恒为 0)
+     * @param {number} newHostSeat — 升级者原 seat(1/2/3,队友优先=2)
+     * @returns {boolean} true=成功,false=参数不合法
+     */
+    migrateHost(oldHostSeat, newHostSeat) {
+      if (oldHostSeat !== 0) return false
+      if (![1, 2, 3].includes(newHostSeat)) return false
+      if (oldHostSeat === newHostSeat) return false
+      // 防御:手牌不存在时不做(空 hands)
+      if (!state.hands[oldHostSeat] || !state.hands[newHostSeat]) return false
+
+      // 1) 旧 host 走人 → 他的 27 张牌"弃牌" → 加入 finishedOrder 末位(算最末)
+      //    这样 finishedOrder 长度可推进(让其他玩家计算"末位补齐"逻辑)
+      const oldHostHand = state.hands[oldHostSeat]
+      // 把旧 host 算作最末位(若他还不在 finishedOrder 里)
+      if (!state.finishedOrder.includes(oldHostSeat)) {
+        state.finishedOrder.push(oldHostSeat)
+      }
+      // 旧 host 的 27 张牌作废(清空)
+      state.hands[oldHostSeat] = []
+
+      // 2) 新 host 的手牌从 hands[newHostSeat] 移到 hands[0]
+      //    hands[newHostSeat] 留空(他现在是 seat 0 了)
+      const newHostHand = state.hands[newHostSeat].slice()
+      state.hands[0] = newHostHand
+      state.hands[newHostSeat] = []
+
+      // 3) 调整 currentPlayer:如果当时是旧 host (0) 或新 host 原 seat (newHostSeat) 回合
+      //    → 切到新 host 回合(逻辑 seat 0)
+      //    其他 seat (1/2/3 中除 newHostSeat 外) 保持
+      if (state.currentPlayer === oldHostSeat || state.currentPlayer === newHostSeat) {
+        state.currentPlayer = 0  // 新 host 现在是 seat 0
+      }
+      if (state.firstPlayer === oldHostSeat || state.firstPlayer === newHostSeat) {
+        state.firstPlayer = 0
+      }
+      if (state.leaderPlayer === oldHostSeat || state.leaderPlayer === newHostSeat) {
+        state.leaderPlayer = 0
+      }
+
+      // 4) lastPlay.who 也要修正(如果在迁移前是这两个 seat 出的牌)
+      if (state.lastPlay && (state.lastPlay.who === oldHostSeat || state.lastPlay.who === newHostSeat)) {
+        state.lastPlay = { ...state.lastPlay, who: 0 }
+      }
+
+      // 5) trickHistory 也要修正(留 trace,但 seat 索引改 0)
+      state.trickHistory = state.trickHistory.map(h => {
+        if (h.seat === oldHostSeat || h.seat === newHostSeat) {
+          return { ...h, seat: 0 }
+        }
+        return h
+      })
+
+      // 6) 旧 host 不再是 AI(他走人了),如果他是 AI(被 aiPlayers 含)就移除
+      if (aiPlayers.includes(oldHostSeat)) {
+        const i = aiPlayers.indexOf(oldHostSeat)
+        if (i >= 0) aiPlayers.splice(i, 1)
+      }
+      // 新 host 不应该再被 AI 接管(他现在是真人 host)
+      if (aiPlayers.includes(newHostSeat)) {
+        const i = aiPlayers.indexOf(newHostSeat)
+        if (i >= 0) aiPlayers.splice(i, 1)
+      }
+
+      emit('host:migrated', { oldHostSeat, newHostSeat, finishedOrder: state.finishedOrder.slice() })
+      return true
+    },
+
     // ★ v3.8 P1:断线重连用,joiner 收到 host 的 STATE_SNAPSHOT 后灌回 state
     // _ 开头为内部 API,使用方:GameView 的 onP2PStateSnapshot
     _applySnapshot(snap) {

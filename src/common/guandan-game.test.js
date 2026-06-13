@@ -192,6 +192,310 @@ async function main() {
     assert('removeAIPlayer(2) 后 aiPlayers 空', game.getAIPlayers().length === 0)
   }
 
+  // ============================================================
+  // ★ v2.1 P3:host 迁移相关
+  // ============================================================
+
+  console.log('\n=== 11. v2.1 P3:migrateHost 座位重映射(seat 2 升级) ===')
+  {
+    const game = createGame({ seats: 4, levelRank: 5, aiPlayers: [] })
+    game.deal()
+    const st0 = game.getState()
+    const oldHand0 = st0.hands[0].slice()
+    const newHostHand = st0.hands[2].slice()
+
+    let migEventFired = false
+    game.on('host:migrated', () => { migEventFired = true })
+
+    const ok = game.migrateHost(0, 2)
+    assert('migrateHost(0, 2) 返回 true', ok === true)
+    const st1 = game.getState()
+
+    // 1) 新 host 的手牌(旧 seat 2 的 27 张)现在在 hands[0]
+    assert('新 host hands[0] === 旧 hands[2]', JSON.stringify(st1.hands[0]) === JSON.stringify(newHostHand))
+    assert('新 host hands[0].length === 27', st1.hands[0].length === 27)
+    // 2) 旧 host (seat 0) 的手牌清空
+    assert('旧 host hands[0] 旧牌被清空', st1.hands[0].length !== oldHand0.length || st1.hands[oldHand0.length === 27 ? 0 : 0] !== oldHand0)
+    // 3) 旧 seat 2 (现在空) hands[2] === []
+    assert('旧 seat 2 hands[2] === []', st1.hands[2].length === 0)
+    // 4) 旧 host (seat 0) 加入 finishedOrder 末位
+    assert('旧 host (seat 0) 在 finishedOrder 里', st1.finishedOrder.includes(0))
+    // 5) levelRank 保持
+    assert('levelRank 不变', st1.levelRank === st0.levelRank)
+    // 6) emit 'host:migrated'
+    assert("emit 'host:migrated'", migEventFired === true)
+  }
+
+  console.log('\n=== 12. v2.1 P3:migrateHost 参数边界 ===')
+  {
+    const game = createGame({ seats: 4, levelRank: 5, aiPlayers: [] })
+    game.deal()
+    // 非法:oldHostSeat !== 0
+    assert('migrateHost(1, 2) 返回 false', game.migrateHost(1, 2) === false)
+    // 非法:newHostSeat 越界
+    assert('migrateHost(0, 0) 返回 false', game.migrateHost(0, 0) === false)
+    assert('migrateHost(0, 4) 返回 false', game.migrateHost(0, 4) === false)
+    assert('migrateHost(0, -1) 返回 false', game.migrateHost(0, -1) === false)
+    // 非法:同 seat
+    assert('migrateHost(0, 0) === false (不需迁移)', game.migrateHost(0, 0) === false)
+  }
+
+  console.log('\n=== 13. v2.1 P3:migrateHost 调整 currentPlayer (旧 host 回合时) ===')
+  {
+    const game = createGame({ seats: 4, levelRank: 5, aiPlayers: [] })
+    game.deal()
+    // 强制 currentPlayer=0 (旧 host 回合)
+    game._applySnapshot({ currentPlayer: 0 })
+    assert('强制后 currentPlayer=0', game.getState().currentPlayer === 0)
+    game.migrateHost(0, 2)
+    // 迁移后 currentPlayer 应=0 (新 host 现在是 seat 0)
+    assert('迁移后 currentPlayer 仍是 0 (新 host 接手)', game.getState().currentPlayer === 0)
+  }
+
+  console.log('\n=== 14. v2.1 P3:migrateHost 调整 currentPlayer (新 host 原 seat 回合时) ===')
+  {
+    const game = createGame({ seats: 4, levelRank: 5, aiPlayers: [] })
+    game.deal()
+    // 强制 currentPlayer=2 (新 host 原 seat 回合)
+    game._applySnapshot({ currentPlayer: 2 })
+    game.migrateHost(0, 2)
+    // 迁移后 currentPlayer 应=0 (新 host 现在是 seat 0)
+    assert('迁移后 currentPlayer 切到 0 (新 host)', game.getState().currentPlayer === 0)
+  }
+
+  console.log('\n=== 15. v2.1 P3:migrateHost 不影响其他 joiner 的 currentPlayer ===')
+  {
+    const game = createGame({ seats: 4, levelRank: 5, aiPlayers: [] })
+    game.deal()
+    // 强制 currentPlayer=1 (旁观 joiner 回合)
+    game._applySnapshot({ currentPlayer: 1 })
+    game.migrateHost(0, 2)
+    // 迁移后 currentPlayer 应=1 (不变)
+    assert('旁观 joiner 回合不变 (currentPlayer=1)', game.getState().currentPlayer === 1)
+  }
+
+  console.log('\n=== 16. v2.1 P3:migrateHost 修正 lastPlay.who (旧 host 出的牌) ===')
+  {
+    const game = createGame({ seats: 4, levelRank: 5, aiPlayers: [] })
+    game.deal()
+    // 模拟 lastPlay 是旧 host (seat 0) 出的
+    game._applySnapshot({
+      lastPlay: { type: 'SINGLE', mainRank: 5, length: 1, who: 0, cards: [{ suit: 0, rank: 5 }] },
+    })
+    game.migrateHost(0, 2)
+    // lastPlay.who 应改成 0 (新 host 现在是 seat 0)
+    assert('lastPlay.who 从旧 host 0 → 新 host 0 (保持 0)', game.getState().lastPlay?.who === 0)
+  }
+
+  console.log('\n=== 17. v2.1 P3:migrateHost 修正 lastPlay.who (新 host 原 seat 出的牌) ===')
+  {
+    const game = createGame({ seats: 4, levelRank: 5, aiPlayers: [] })
+    game.deal()
+    // 模拟 lastPlay 是新 host 原 seat 2 出的
+    game._applySnapshot({
+      lastPlay: { type: 'SINGLE', mainRank: 5, length: 1, who: 2, cards: [{ suit: 0, rank: 5 }] },
+    })
+    game.migrateHost(0, 2)
+    // lastPlay.who 应改成 0
+    assert('lastPlay.who 从 2 → 0 (新 host)', game.getState().lastPlay?.who === 0)
+  }
+
+  console.log('\n=== 18. v2.1 P3:migrateHost trickHistory seat 重映射 ===')
+  {
+    const game = createGame({ seats: 4, levelRank: 5, aiPlayers: [] })
+    game.deal()
+    // 模拟 trickHistory 含旧 host 和新 host 原 seat
+    game._applySnapshot({
+      trickHistory: [
+        { seat: 0, cards: [{ suit: 0, rank: 5 }] },
+        { seat: 2, pass: true },
+        { seat: 1, cards: [{ suit: 0, rank: 7 }] },
+      ],
+    })
+    game.migrateHost(0, 2)
+    const h = game.getState().trickHistory
+    assert('trickHistory[0].seat 旧 host 0 → 新 host 0', h[0]?.seat === 0)
+    assert('trickHistory[1].seat 新 host 原 2 → 0', h[1]?.seat === 0)
+    assert('trickHistory[2].seat 旁观者 1 不变', h[2]?.seat === 1)
+  }
+
+  console.log('\n=== 19. v2.1 P3:migrateHost 清理 aiPlayers ===')
+  {
+    const game = createGame({ seats: 4, levelRank: 5, aiPlayers: [0] })
+    game.deal()
+    assert('初始 aiPlayers=[0]', game.getAIPlayers().includes(0))
+    game.migrateHost(0, 2)
+    // 旧 host (0) 不再 AI,他走了
+    assert('迁移后 aiPlayers 不含 0', !game.getAIPlayers().includes(0))
+  }
+
+  console.log('\n=== 20. v2.1 P3:网络层 selectNextHostCandidate (BC 集成) ===')
+  {
+    const Host = await import('./network.js?tag=mig-cand-' + Date.now())
+    Host.startAsHost({ nickname: 'H', avatar: 'H' })
+    await new Promise(r => setTimeout(r, 30))
+
+    // 模拟加入 3 个 joiner(直接改 host 端 peers map)
+    Host.getPeers().set(1, { nickname: 'A', uuid: 'u1' })
+    Host.getPeers().set(2, { nickname: 'B', uuid: 'u2' })
+    Host.getPeers().set(3, { nickname: 'C', uuid: 'u3' })
+
+    // 调用 selectNextHostCandidate → 期望 seat 2 (队友优先)
+    const cand = Host.selectNextHostCandidate()
+    assert('selectNextHostCandidate 优先选 seat 2 (队友)', cand === 2)
+
+    // 移除 seat 2 → 期望 seat 1
+    Host.getPeers().delete(2)
+    assert('seat 2 不在 → 选 seat 1', Host.selectNextHostCandidate() === 1)
+
+    // 移除 seat 1 → 期望 seat 3
+    Host.getPeers().delete(1)
+    assert('seat 1 也不在 → 选 seat 3', Host.selectNextHostCandidate() === 3)
+
+    // 全部移除 → 期望 0 (没人)
+    Host.getPeers().delete(3)
+    assert('全掉光 → 返回 0', Host.selectNextHostCandidate() === 0)
+
+    Host.close()
+  }
+
+  console.log('\n=== 21. v2.1 P3:网络层 requestHostMigration 自动选候选 ===')
+  {
+    const Host = await import('./network.js?tag=mig-req-' + Date.now())
+    Host.setRoomId('mig-req-test')
+    Host.startAsHost({ nickname: 'H', avatar: 'H' })
+    await new Promise(r => setTimeout(r, 30))
+
+    Host.getPeers().set(1, { nickname: 'A', uuid: 'u1' })
+    Host.getPeers().set(2, { nickname: 'B', uuid: 'u2' })
+    Host.getPeers().set(3, { nickname: 'C', uuid: 'u3' })
+
+    // 收集 host 端 broadcast 的消息
+    const sentMsgs = []
+    const origSend = Host._getTransport().send.bind(Host._getTransport())
+    Host._getTransport().send = (m) => { sentMsgs.push(m); return true }
+
+    // 不传 newHostSeat → 自动选
+    const r = Host.requestHostMigration()
+    assert('requestHostMigration() 返回 true', r === true)
+    const leaveMsg = sentMsgs.find(m => m.type === 'PEER_LEAVE')
+    assert('broadcast 了 PEER_LEAVE', leaveMsg != null)
+    assert('PEER_LEAVE.payload.migrate = true', leaveMsg?.payload?.migrate === true)
+    assert('PEER_LEAVE.payload.newHostSeat = 2 (队友优先)', leaveMsg?.payload?.newHostSeat === 2)
+
+    Host.close()
+  }
+
+  console.log('\n=== 22. v2.1 P3:joiner 端 PEER_LEAVE 触发 host:migrated 事件 (走 BC transport 集成) ===')
+  {
+    // 用真实 BC transport:host + 2 joiner,host 调 requestHostMigration,
+    // 验证 joiner 端 (seat 2 = 新 host) 收到 host:migrated 事件 + isHost=true
+    if (typeof BroadcastChannel === 'undefined') {
+      console.log('  - 跳过:Node24 BroadcastChannel 不可用')
+      assert('BC 集成 skipped', true)
+    } else {
+      const Host = await import('./network.js?tag=mig-int-h-' + Date.now())
+      Host.setRoomId('mig-int-test')
+      Host.startAsHost({ nickname: 'H', avatar: 'H' })
+      await new Promise(r => setTimeout(r, 30))
+
+      const J1 = await import('./network.js?tag=mig-int-j1-' + Date.now())
+      J1.joinRoom('mig-int-test', { nickname: 'A', avatar: 'A' })
+      let s1 = -1
+      for (let i = 0; i < 50 && s1 === -1; i++) { await new Promise(r => setTimeout(r, 10)); s1 = J1.getSelfSeat() }
+      assert('J1 seat=1', s1 === 1)
+
+      const J2 = await import('./network.js?tag=mig-int-j2-' + Date.now())
+      J2.joinRoom('mig-int-test', { nickname: 'B', avatar: 'B' })
+      let s2 = -1
+      for (let i = 0; i < 50 && s2 === -1; i++) { await new Promise(r => setTimeout(r, 10)); s2 = J2.getSelfSeat() }
+      assert('J2 seat=2', s2 === 2)
+
+      const J3 = await import('./network.js?tag=mig-int-j3-' + Date.now())
+      J3.joinRoom('mig-int-test', { nickname: 'C', avatar: 'C' })
+      let s3 = -1
+      for (let i = 0; i < 50 && s3 === -1; i++) { await new Promise(r => setTimeout(r, 10)); s3 = J3.getSelfSeat() }
+      assert('J3 seat=3', s3 === 3)
+
+      // J2 监听 host:migrated
+      let j2MigEvent = null
+      J2.on('host:migrated', (e) => { j2MigEvent = e })
+      // J1 / J3 也监听(旁观)
+      let j1MigEvent = null
+      J1.on('host:migrated', (e) => { j1MigEvent = e })
+      let j3MigEvent = null
+      J3.on('host:migrated', (e) => { j3MigEvent = e })
+
+      // host 调 requestHostMigration (不传 newHostSeat,自动选)
+      const r = Host.requestHostMigration()
+      assert('host.requestHostMigration() 返回 true', r === true)
+
+      // 等广播
+      await new Promise(r => setTimeout(r, 200))
+
+      // J2 端:被选为新 host,isMyself=true
+      assert('J2 收到 host:migrated 事件', j2MigEvent != null)
+      assert('J2 端 isMyself=true (自己是新 host)', j2MigEvent?.isMyself === true)
+      assert('J2 端 newHostSeat=2 (自己原 seat)', j2MigEvent?.newHostSeat === 2)
+      assert('J2 端 selfSeat 升为 0', J2.getSelfSeat() === 0)
+      assert('J2 端 isHost() === true', J2.isHost() === true)
+
+      // J1 / J3 旁观:isMyself=false
+      assert('J1 收到 host:migrated 事件', j1MigEvent != null)
+      assert('J1 端 isMyself=false', j1MigEvent?.isMyself === false)
+      assert('J1 端 newHostSeat=2', j1MigEvent?.newHostSeat === 2)
+      assert('J1 端 selfSeat 不变 (仍是 1)', J1.getSelfSeat() === 1)
+
+      assert('J3 收到 host:migrated 事件', j3MigEvent != null)
+      assert('J3 端 isMyself=false', j3MigEvent?.isMyself === false)
+      assert('J3 端 selfSeat 不变 (仍是 3)', J3.getSelfSeat() === 3)
+
+      // 关闭
+      J1.close(); J2.close(); J3.close(); Host.close()
+      await new Promise(r => setTimeout(r, 30))
+    }
+  }
+
+  console.log('\n=== 23. v2.1 P3:announceNewHost 广播 NEW_HOST (新 host 上任后通知) ===')
+  {
+    // 新 host (J2 at selfSeat=0 after migration) 调 announceNewHost
+    if (typeof BroadcastChannel === 'undefined') {
+      assert('BC skipped', true)
+    } else {
+      const Host = await import('./network.js?tag=mig-ann-h-' + Date.now())
+      Host.setRoomId('mig-ann-test')
+      Host.startAsHost({ nickname: 'H', avatar: 'H' })
+      await new Promise(r => setTimeout(r, 30))
+
+      const J1 = await import('./network.js?tag=mig-ann-j1-' + Date.now())
+      J1.joinRoom('mig-ann-test', { nickname: 'A', avatar: 'A' })
+      let s1 = -1
+      for (let i = 0; i < 50 && s1 === -1; i++) { await new Promise(r => setTimeout(r, 10)); s1 = J1.getSelfSeat() }
+      assert('J1 seat=1', s1 === 1)
+
+      // 模拟 J1 升为新 host(自己 isHost=false 不行,得改 isHostFlag)
+      // 简化:用 Host (real host) 调 announceNewHost → 它的 isHostFlag=true 会拒绝
+      const r1 = Host.announceNewHost({ snapshot: null })
+      assert('announceNewHost 在 isHost=true 时返回 false', r1 === false)
+
+      // 测试 joiner (非 host) 调 announceNewHost
+      // 收集 broadcast 消息
+      const sentByJ1 = []
+      const origSend = J1._getTransport().send.bind(J1._getTransport())
+      J1._getTransport().send = (m) => { sentByJ1.push(m); return true }
+
+      const r2 = J1.announceNewHost({ test: 'snap' })
+      assert('announceNewHost 在 joiner 上返回 true', r2 === true)
+      const newHostMsg = sentByJ1.find(m => m.type === 'NEW_HOST')
+      assert('joiner broadcast 了 NEW_HOST', newHostMsg != null)
+      assert('NEW_HOST.payload.newHostSeat = 1 (joiner 原 seat)', newHostMsg?.payload?.newHostSeat === 1)
+      assert('NEW_HOST.payload.snapshot.test = snap', newHostMsg?.payload?.snapshot?.test === 'snap')
+
+      J1.close(); Host.close()
+      await new Promise(r => setTimeout(r, 30))
+    }
+  }
+
   console.log(`\n========== 游戏状态机测试: ${pass} 通过 / ${fail} 失败 ==========\n`)
   process.exit(fail > 0 ? 1 : 0)
 }

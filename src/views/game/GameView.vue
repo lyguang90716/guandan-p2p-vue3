@@ -162,6 +162,19 @@
       </div>
     </transition>
 
+    <!-- v2.1 P3:host 迁移提示 — 新 host 显示"你已成为新房主",旁观者显示"X 已成为新房主" -->
+    <transition name="toast">
+      <div v-if="hostMigrationToast" class="host-mig-toast" :class="{ 'is-self': hostMigrationToast.isMyself }" role="status" aria-live="polite">
+        <span class="mig-icon">👑</span>
+        <span class="mig-text">{{ hostMigrationToast.text }}</span>
+      </div>
+    </transition>
+
+    <!-- v2.1 P3:host 迁移角标 — 标题旁的小标签(让用户知道已迁移) -->
+    <div v-if="hostMigrationBadge" class="host-mig-badge" title="host 已迁移">
+      已迁移
+    </div>
+
     <!-- v3.7 P1:聊天快捷短语弹层(点 💬 时弹出) -->
     <ChatQuickPanel
       :visible="showChatPanel"
@@ -280,6 +293,41 @@ function onChatSelect({ phrase }) {
   if (chatPhraseTimer) clearTimeout(chatPhraseTimer)
   chatPhraseTimer = setTimeout(() => { chatPhraseToast.value = '' }, 2000)
   // v2.0:此处接 net.broadcast({ type: 'CHAT_QUICK', payload: { phrase, from: 0 } })
+}
+
+// v2.1 P3:host 迁移提示
+// hostMigrationToast: { text, isMyself } — 顶部弹的 toast
+// hostMigrationBadge: bool — 标题旁"已迁移"小角标
+const hostMigrationToast = ref(null)
+const hostMigrationBadge = ref(false)
+let hostMigToastTimer = null
+let hostMigBadgeHideTimer = null
+function showHostMigrationToast({ isMyself, newHostSeat }) {
+  if (isMyself) {
+    hostMigrationToast.value = { text: '你已成为新房主', isMyself: true }
+  } else {
+    // 找新 host 的名字(从 players 里拿 seat X 的名字)
+    const name = players.value[newHostSeat]?.name || `玩家${newHostSeat}`
+    hostMigrationToast.value = { text: `${name} 已成为新房主`, isMyself: false }
+  }
+  if (hostMigToastTimer) clearTimeout(hostMigToastTimer)
+  hostMigToastTimer = setTimeout(() => {
+    hostMigrationToast.value = null
+  }, isMyself ? 5000 : 3000)
+  // 角标一直显示到局结束(简化)
+  hostMigrationBadge.value = true
+}
+function onHostMigrated(payload) {
+  if (!payload) return
+  // payload 由 network.js 发出: { newHostSeat, snapshot, isMyself? }
+  const isMyself = payload.isMyself === true
+  const newHostSeat = payload.newHostSeat
+  if (newHostSeat == null) return
+  showHostMigrationToast({ isMyself, newHostSeat })
+  // 自己是新 host → 同步 game state
+  if (isMyself && game.value && payload.snapshot) {
+    try { game.value._applySnapshot(payload.snapshot) } catch (e) {}
+  }
 }
 
 // v3.7 P1:紧急蜂鸣 + 手牌区闪红(turnTimeLeft <= 5 && myTurn)
@@ -934,6 +982,9 @@ onMounted(() => {
     // 广播 AI_TAKEOVER { seat },所有 tab 把该 seat 加到 aiPlayers
     // host 端 game 调度 AI 接管该 seat;其他 tab 收到 PLAY 后 apply
     net.on('message:AI_TAKEOVER', onP2PAITakeover)
+    // ★ v2.1 P3:host 迁移 — 旧 host 退场后某个 joiner 升级
+    // network 收到 PEER_LEAVE { migrate: true } 或 NEW_HOST → emit 'host:migrated'
+    net.on('host:migrated', onHostMigrated)
     if (selfSeat.value === 0) {
       // host:有 joiner 连入时,广播当前 state
       net.on('connect', ({ seat, info }) => {
@@ -1148,6 +1199,8 @@ onUnmounted(() => {
   try { net.off && net.off('message:ROUND_END') } catch (e) {}
   try { net.off && net.off('message:STATE_SNAPSHOT') } catch (e) {}
   try { net.off && net.off('message:AI_TAKEOVER') } catch (e) {}
+  // v2.1 P3:清理 host 迁移监听
+  try { net.off && net.off('host:migrated') } catch (e) {}
   // v3.7 P1:清理 keydown 监听
   try { document.removeEventListener('keydown', onKeyDown) } catch (e) {}
   // 清理 toast timer
@@ -1555,5 +1608,60 @@ onUnmounted(() => {
 .toast-enter-to, .toast-leave-from {
   opacity: 1;
   transform: translateX(-50%) translateY(0);
+}
+
+/* ============================================================
+ * v2.1 P3:host 迁移提示
+ * ============================================================ */
+.host-mig-toast {
+  position: fixed;
+  top: 80px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: linear-gradient(135deg, rgba(255, 215, 0, 0.95), rgba(255, 165, 0, 0.95));
+  border: 2px solid #fff;
+  border-radius: 12px;
+  padding: 12px 24px;
+  font-size: 16px;
+  font-weight: 800;
+  color: #1a1f4a;
+  letter-spacing: 1px;
+  z-index: 250;
+  box-shadow: 0 6px 24px rgba(255, 165, 0, 0.6);
+  white-space: nowrap;
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.host-mig-toast.is-self {
+  background: linear-gradient(135deg, rgba(76, 175, 80, 0.95), rgba(33, 150, 243, 0.95));
+  color: #fff;
+  box-shadow: 0 6px 24px rgba(33, 150, 243, 0.6);
+}
+.mig-icon {
+  font-size: 20px;
+}
+
+/* v2.1 P3:已迁移角标 — 标题旁小标签 */
+.host-mig-badge {
+  position: fixed;
+  top: 16px;
+  right: 70px;
+  background: rgba(255, 165, 0, 0.85);
+  color: #1a1f4a;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 3px 10px;
+  border-radius: 10px;
+  border: 1px solid #fff;
+  z-index: 150;
+  letter-spacing: 0.5px;
+  pointer-events: none;
+  animation: badge-pulse 2s ease-in-out infinite;
+}
+@keyframes badge-pulse {
+  0%, 100% { opacity: 0.85; }
+  50% { opacity: 1; box-shadow: 0 0 12px rgba(255, 165, 0, 0.8); }
 }
 </style>

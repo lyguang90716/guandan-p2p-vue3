@@ -346,6 +346,7 @@ function _handleJoinerMessage(msg) {
   } else if (msg.type === 'PEER_LEAVE') {
     const seat = msg.payload?.seat
     const kicked = msg.payload?.kick === true
+    const migrate = msg.payload?.migrate === true
     if (seat != null && peers.has(seat)) {
       peers.delete(seat)
       emit('peer:leave', { seat })
@@ -357,11 +358,44 @@ function _handleJoinerMessage(msg) {
     if (kicked && seat === selfSeat) {
       emit('self:kicked', { reason: msg.payload?.reason || 'kicked' })
     }
+    // ★ v2.1 P3:host 迁移标记 — joiner 收到 PEER_LEAVE { seat: 0, migrate: true }
+    //   如果自己是被选中的新 host(newHostSeat) → 升级
+    if (migrate && seat === 0) {
+      const newHostSeat = msg.payload?.newHostSeat
+      if (newHostSeat != null && newHostSeat === selfSeat) {
+        // 我就是新 host:把自己升到 seat 0
+        const myInfo = peers.get(selfSeat) || selfInfo
+        peers.delete(selfSeat)
+        peers.set(0, myInfo)
+        selfSeat = 0
+        isHostFlag = true
+        emit('host:migrated', { newHostSeat, snapshot: null, isMyself: true })
+      } else if (newHostSeat != null) {
+        // 旁观者:等新 host 广播 NEW_HOST,或者这里先占位
+        emit('host:migrated', { newHostSeat, snapshot: null, isMyself: false })
+      }
+    }
   } else if (msg.type === 'AI_TAKEOVER') {
     // ★ v2.0 BUG-7:joiner 端收到 AI_TAKEOVER → 触发本地 ai:takeover
     const seat = msg.payload?.seat
     if (seat != null) {
       emit('ai:takeover', { seat })
+    }
+  } else if (msg.type === 'NEW_HOST') {
+    // ★ v2.1 P3:某 joiner 升级为新 host,广播通知所有 joiner
+    const newHostSeat = msg.payload?.newHostSeat
+    if (newHostSeat == null) return
+    // 检查自己是否就是新 host(自己已经处理过,跳过)
+    if (selfSeat === newHostSeat) return
+    // 旁观 joiner:更新 host 信息(peers 里 seat 0 = 新 host)
+    if (peers.has(newHostSeat)) {
+      // 旧 host 已被踢出(在 PEER_LEAVE 时清理),这里把新 host 升到 seat 0
+      const newHostInfo = peers.get(newHostSeat)
+      peers.delete(newHostSeat)
+      peers.set(0, newHostInfo)
+      // 新 host 那个 joiner 端之前 setSelfSeat 已经是 0 了(他在 announceNewHost 之前就调了)
+      // 旁观者的 selfSeat 不变
+      emit('host:migrated', { newHostSeat, snapshot: msg.payload?.snapshot })
     }
   }
 }
@@ -471,6 +505,70 @@ function close() {
   lastHeartbeat.clear()
 }
 
+// ============== v2.1 P3:Host 迁移 ==============
+/**
+ * 选下一个 host 候选 —— 队友优先(seat 2),然后左手对手(1)、右手对手(3)
+ *
+ * ★ 简化设计:不弹选人 UI,直接按规则选第一个还在场的 joiner
+ * (按 seats 数组顺序: 2, 1, 3)
+ *
+ * @returns {number} 新 host 候选 seat(0/1/2/3),0 表示无候选(全掉光)
+ */
+function selectNextHostCandidate() {
+  // 优先级:seat 2 (队友) > seat 1 (左手) > seat 3 (右手)
+  for (const seat of [2, 1, 3]) {
+    if (peers.has(seat)) return seat
+  }
+  return 0  // 没人了
+}
+
+/**
+ * Host 主动发起迁移 —— host 自踢或心跳超时后调用
+ *
+ * ★ 跟 task B kick player 的区别:
+ *   - kick player:踢某个 joiner,host 自己留下继续
+ *   - host 迁移:host 自己走,选个 joiner 升为新 host
+ *
+ * 流程:
+ *   1) 选候选升级者(队友优先)
+ *   2) 广播 PEER_LEAVE { seat: 0, migrate: true } 给所有 joiner
+ *   3) joiner 端收到后选自己是否为新 host(seat === newHostSeat)
+ *   4) 升级者把 selfSeat 改为 0,广播 NEW_HOST 消息
+ *
+ * ★ 调用前提:调用方需保证已经在 GameView 层调 game.value.migrateHost(0, newHostSeat)
+ *
+ * @param {number} newHostSeat 选中的新 host 原 seat(1/2/3)
+ * @returns {boolean} true=成功发起
+ */
+function requestHostMigration(newHostSeat) {
+  if (!isHostFlag) return false
+  if (![1, 2, 3].includes(newHostSeat)) {
+    // 调用方没传 → 自动选
+    newHostSeat = selectNextHostCandidate()
+    if (newHostSeat === 0) return false  // 没人了,牌局结束
+  }
+  // 广播 PEER_LEAVE + 迁移标记
+  sendMessage({
+    type: 'PEER_LEAVE',
+    payload: { seat: 0, migrate: true, newHostSeat },
+  })
+  return true
+}
+
+/**
+ * 升级者收到自己被选中,广播 NEW_HOST 通知所有 joiner
+ *
+ * @param {object} [snapshot] — 当前 game state 快照(可选,joiner 端用来同步)
+ */
+function announceNewHost(snapshot) {
+  if (isHostFlag) return false  // 自己已经是 host,不需要
+  sendMessage({
+    type: 'NEW_HOST',
+    payload: { newHostSeat: selfSeat, snapshot: snapshot || null },
+  })
+  return true
+}
+
 function isConnected() { return !!transport }
 function getPeers() { return peers }
 function getSelfInfo() { return selfInfo }
@@ -528,6 +626,8 @@ export {
   startAsHost, joinRoom, send, broadcast, sendTo,
   scanLanRooms,
   ensureUuid,
+  // ★ v2.1 P3:host 迁移 API
+  selectNextHostCandidate, requestHostMigration, announceNewHost,
   // ★ 测试辅助(不属于公开 API)
   _sendHeartbeat, _tickHeartbeatChecker, _forceExpireHeartbeat,
   _setIntervalFn, _clearIntervalFn, _setTimeoutFn, _clearTimeoutFn,
@@ -544,5 +644,7 @@ const net = {
   getRoomId, setRoomId, getSelfSeat, setSelfSeat,
   startAsHost, joinRoom, send, broadcast, sendTo,
   scanLanRooms,
+  // ★ v2.1 P3:host 迁移
+  selectNextHostCandidate, requestHostMigration, announceNewHost,
 }
 export default net
