@@ -27,7 +27,7 @@ npm run dev
 
 # 3. 跑测试(可选,验证环境)
 npm test
-# 期望: 279 用例 / 0 失败
+# 期望: 701 用例 / 0 失败
 ```
 
 **4 标签联机测试**:
@@ -39,23 +39,29 @@ npm test
 
 ## 三、核心特性
 
-### 3.1 已完成(v0.1.0,2026-06)
+### 3.1 已完成(v0.3.0,2026-06)
 
 - ✅ **完整掼蛋规则**:14 种牌型 + 逢人配(红桃级牌万能)+ 升级 + 进贡
 - ✅ **AI 单机对战**:3 个 AI + 1 个玩家,中等难度
-- ✅ **局域网 P2P 联机**:同浏览器 4 标签可联(BroadcastChannel 模拟)
+- ✅ **局域网 P2P 联机**:同浏览器 4 标签可联(BroadcastChannel 开发态)
+- ✅ **真机跨设备联机**:AndroidWs 真机 host + 浏览器/真机 joiner 通过 WebSocket 加入(2 真机 + 2 浏览器 tab 已验证)
+- ✅ **房主控制**:host 主动踢人(`self:kicked` Toast 跳页)+ host 崩溃后对家自动迁移
+- ✅ **心跳 6-8s 精确释放**:掉线判定 2s/2s/6s 三段退避,目标 6-8s 窗口,AI 接管兜底
+- ✅ **QR 兜底卡片**:扫码失败降级到 IP+端口文本,可手输
+- ✅ **Capacitor Android APK 打包**:debug APK 4MB / production 6-8MB(详见 `BUILD.md`)
 - ✅ **零公网依赖**:无后端 / 无 fetch / 无远程字体 / 无 CDN
 - ✅ **零第三方 UI 库**:Vue 3 + 原生 CSS + 自写设计 token
 - ✅ **零账号系统**:本地 localStorage 存昵称 / 头像 / 设置 / 战绩
-- ✅ **完整工程化**:279 单元测试 + Playwright 截图回归
-- ✅ **打包就绪**:Capacitor 集成(详见 `BUILD.md`)
+- ✅ **完整工程化**:701 单元测试 + Chrome CDP 4-tab 联机回归
+- ✅ **零依赖运行时**:核心算法 100% 自实现(`src/common/` 纯 JS,无 Vue 依赖)
 
-### 3.2 已知限制(等 v2.0)
+### 3.2 v0.3.0 后待办(等 v3.0+)
 
-- ❌ 真机跨设备不联(浏览器版网络层限制)
-- ❌ 没原生 APK/IPA 打包配置
-- ❌ AI 只有中等难度
-- ❌ 无录像回放
+- ❌ **AI 难度分档**:当前只有中等难度(规则 + 贪心),Easy / Hard 暂未实现
+- ❌ **录像回放**:一局打完后无法回看每手牌决策路径
+- ❌ **iOS 脚手架**:Capacitor iOS 工程未建,Mac + Xcode 走一遍
+- ❌ **v3.8 P2 录像 / 聊天**:之前规划里的 P2 优先级放低
+- ❌ **多语言**:当前中文 UI 硬编码,英文/繁体未抽 i18n
 
 ---
 
@@ -105,7 +111,18 @@ guandan-p2p-vue3/
 │   │   ├── card-api.js         # 卡牌数据 API
 │   │   ├── card-api.test.js
 │   │   ├── effects.js          # 视觉特效
-│   │   ├── network.js          # P2P 网络(BroadcastChannel)
+│   │   ├── network.js          # P2P 网络(BC / WS / AndroidWs 三 transport)
+│   │   ├── network-transport-bc.js       # 浏览器开发态 transport
+│   │   ├── network-transport-ws.js       # 浏览器↔真机 WS 客户端
+│   │   ├── network-transport-android-ws.js # 真机 host transport
+│   │   ├── ws-server.js        # 浏览器端 WsServer 桥(配合 Android plugin)
+│   │   ├── qr-fallback.js      # QR 兜底卡片纯函数(formatHostAddress 等)
+│   │   ├── seat-rotation.js    # 座位旋转纯函数(GameView 抽出)
+│   │   ├── network.test.js / network-multitab.test.js
+│   │   ├── network-kick-player.test.js  # 房主踢人单测
+│   │   ├── network-cross-device.test.js # 跨设备联机单测
+│   │   ├── ws-server.test.js   # WsServer 单测
+│   │   ├── qr-fallback.test.js # QR 兜底纯函数单测
 │   │   └── storage.js          # localStorage 封装
 │   ├── components/          # Vue 组件
 │   │   ├── HudTop.vue          # 顶部 HUD
@@ -119,12 +136,14 @@ guandan-p2p-vue3/
 │   │   ├── NicknameEditor.vue  # 昵称编辑器
 │   │   ├── ChatQuickPanel.vue  # 快捷聊天
 │   │   ├── PlayHintButton.vue  # 智能理牌
+│   │   ├── QrFallbackCard.vue  # QR 兜底卡片(扫码失败降级 IP 文本)
 │   │   └── HistoryChart.vue    # 战绩图表
 │   └── views/               # 页面级组件
 │       ├── index/HomeView.vue     # 首页
-│       ├── room/RoomView.vue      # 房间页
-│       ├── join/JoinView.vue      # 加入页
-│       ├── game/GameView.vue      # 对局页(1257 行)
+│       ├── room/RoomView.vue      # 房间页(host IP/QR/踢人)
+│       ├── join/JoinView.vue      # 加入页(hostIp:hostPort)
+│       ├── game/GameView.vue      # 对局页(1257 行,seat 旋转薄壳)
+│       ├── game/GameView.test.js  # seat rotation 56 case 单测
 │       ├── ai/AIView.vue          # AI 单机
 │       ├── guide/GuideView.vue    # 新手引导
 │       ├── history/HistoryView.vue# 战绩
@@ -143,7 +162,7 @@ guandan-p2p-vue3/
 | 改规则的工程师 | `docs/ENGINE.md` → `docs/TESTING.md` |
 | 改 AI 的工程师 | `docs/AI.md` → `docs/TESTING.md` |
 | 改 UI 的工程师 | `docs/UI.md` → `docs/STYLE.md` |
-| 改联机的工程师 | `docs/NETWORK.md` |
+| 改联机的工程师 | `docs/NETWORK.md`(三 transport 抽象 + 跨设备流程 + 心跳调参) |
 | 准备打 APK/IPA | `BUILD.md` |
 | 遇到 bug | `TROUBLESHOOTING.md` |
 | 想加新功能 | `docs/HOWTO-EXTEND.md` |
@@ -160,11 +179,14 @@ npm run build             # 生产构建(产物 dist/)
 npm run preview           # 预览 dist/
 
 # 测试
-npm test                  # 全部 279 用例
-npm run test:engine       # 规则引擎 85 用例
+npm test                  # 全部 701 用例
+npm run test:engine       # 规则引擎 93 用例
 npm run test:ai           # AI 44 用例
-npm run test:game         # 状态机 3 用例
+npm run test:game         # 状态机 78 用例
 npm run test:anim         # 发牌动画 + 音频 128 用例
+npm run test:ws           # WsServer 29 用例(v2.0 真机 host)
+npm run test:kick         # 房主踢人 51 用例(v2.1)
+npm run test:rotation     # 座位旋转 56 用例(v2.1)
 
 # 性能
 npm run bench             # 跑性能基准
@@ -190,7 +212,7 @@ npm run bench             # 跑性能基准
 - **离线优先**:零公网、零账号、零流量、零广告
 - **零依赖**:Vue 3 + Vite + 原生 CSS,无第三方 UI 库
 - **核心独立**:`src/common/` 纯 JS,无 Vue 依赖,可单独在 Node 跑
-- **测试覆盖**:279 单测,改算法必加测试
+- **测试覆盖**:701 单测,改算法必加测试
 - **设计 token 化**:`src/styles/tokens.css` 集中管理,改色改间距改这里
 - **响应式?**:桌面 1280×800 固定布局,移动适配 v2.0
 
@@ -203,7 +225,8 @@ npm run bench             # 跑性能基准
 | 前端框架 | Vue 3 | 组合式 API + Vite 编译快 + Vue DevTools |
 | 构建工具 | Vite | 极快冷启动 + 原生 ESM |
 | 网络层(v1.0) | BroadcastChannel | 浏览器原生、零依赖,够开发/演示 |
-| 网络层(v2.0) | TCP Socket + 移动热点 | 跨设备,真机 |
+| 网络层(v2.0) | WebSocket(浏览器原生 + AndroidWs plugin) | 跨设备,真机 host + 浏览器/真机 joiner |
+| 网络层(v2.2) | `WebSocketTransport` 客户端(浏览器原生 ws) | 浏览器开 BC 模式可作 joiner,无需 Capacitor |
 | 样式 | 原生 CSS + scoped + tokens | 零依赖,版权干净 |
 | 测试 | Node 原生 assert + console.log | 零测试框架依赖 |
 | 状态管理 | Vue ref + computed | 单页复杂状态,Pinia 过度 |
@@ -219,9 +242,12 @@ npm run bench             # 跑性能基准
 | v1.0 | ✅ 完成 | 规则 + AI + 浏览器版联机 |
 | v3.0-3.6 | ✅ 完成 | UI/UX 优化 |
 | v3.7 | ✅ 完成 | 体验优化(报数/音效/快捷键/设置) |
-| v3.8 | 📋 计划 | P2P 聊天 / 录像回放 |
-| v2.0 | 🚧 设计 | 真机 TCP Socket + Capacitor 打包 |
-| v4.0 | 💭 构思 | AI 三档难度 |
+| v3.8 | ✅ 完成 | 4-tab 局域网联机 P0+P1+P2 |
+| v2.0 | ✅ 完成 | AndroidWs 真机 host + Capacitor 打包 + WsServerPlugin |
+| v2.1 | ✅ 完成 | 心跳调参 + 4-tab 健壮性 + 房主踢人 + host 迁移 |
+| v2.2 | ✅ 完成 | QR 兜底 + 跨设备联机(2 真机 + 2 浏览器) |
+| v0.3.0 | ✅ 当前 | v2.x 三里程碑收官,701/0 单测 |
+| v3.0 | 💭 构思 | AI 三档难度 + 录像回放 |
 
 详见 `docs/ROADMAP.md` / `docs/CHANGELOG.md`。
 
@@ -256,8 +282,8 @@ npm run bench             # 跑性能基准
 - 打包教程:[BUILD.md](./BUILD.md)
 - 排错指南:[TROUBLESHOOTING.md](./TROUBLESHOOTING.md)
 - 详细文档:[docs/](./docs/)
-- 当前版本:`v0.1.0`(2026-06-09)
+- 当前版本:`v0.3.0`(2026-06-13,v2.x 收官)
 
 ---
 
-**最后更新**:2026-06-09(v3.7 完工 + 完整文档齐备)
+**最后更新**:2026-06-13(v2.0 真机 host + v2.1 房主控制 + v2.2 跨设备联机,701/0 单测,真机 APK 可发)

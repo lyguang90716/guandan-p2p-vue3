@@ -4,6 +4,78 @@
 
 ---
 
+## v0.3.0 (2026-06-13) — v2.x 收官(真机跨设备 + 房主控制 + QR 兜底)
+
+> 一个版本内含 v2.0 / v2.1 / v2.2 三个里程碑,17 个 commit。**架构级变化**:网络层从 BroadcastChannel 单机换成"开发态 BC + 真机/跨设备态 WebSocket"双轨,打包链路从纯 H5 升级到 Capacitor Android APK 可发。
+
+### 新增
+
+#### v2.0 — AndroidWs 真机 host + Capacitor 打包(commits 44a93c7 → f5dafee)
+
+- `network.js` 引入 `WebSocketTransport`,BC 退为开发态默认,真机/跨设备态用 WS
+- `src/common/network-transport-bc.js` / `network-transport-ws.js` / `network-transport-android-ws.js` 三 transport 抽象(同一接口,可插拔)
+- `src/common/ws-server.js` 浏览器端 WsServer 桥(配合 Android plugin)
+- `android/` Capacitor 8 脚手架 + cleartext + 3 个 manifest 权限(INTERNET / ACCESS_NETWORK_STATE / ACCESS_WIFI_STATE)
+- `WsServerPlugin` 原生 Java 插件(真机起 WS server + 接受浏览器/真机 joiner)
+- `@capacitor/app + preferences + splash-screen + status-bar` 5MB 体积下限
+- 修 `sendToClient` seatMap 路由(P0 验证发现)
+- dedup 3 个 manifest 权限(顶部已列)
+- `RoomView.vue` host IP/QR 重新接 UI(扫码/手输 host IP 都能加入)
+- `BUILD.md` 真机测试指南 + APK 产物文档
+
+#### v2.1 — 心跳调参 + 4-tab 健壮性 + 房主控制(commits ebe57d3 → c65e9be)
+
+- `network.js` 心跳参数 2s/2s/6s,目标 6-8s 精确释放窗口
+- `RoomView.vue` 暴露 `__gd_net` hook(4-tab 端到端 E2E 测试用)
+- `src/common/seat-rotation.js` 抽纯函数(`rotateSeats` / `rotateSeatView`),`GameView.vue` 改薄壳
+- `src/views/game/GameView.test.js` 56 case seat rotation 单测
+- `network.js` `forceDisconnectSeat` 真做(host 主动踢人三 transport 对称实现)
+- `RoomView.vue` host 加踢人按钮 + joiner 收 `self:kicked` 事件跳 Toast
+- `migrateHost(seat)` host 崩溃/退房时由对家接管(WARN-2 fix)
+- 心跳超时 AI 接管(`AI_TAKEOVER` 广播)
+
+#### v2.2 — QR 兜底卡片 + 跨设备联机(commits f87c6fb → 08cde9a)
+
+- `QrFallbackCard.vue` 二维码加载失败时降级到 IP+端口文本(扫不到码可手输)
+- `qrcode` 依赖上线,`RoomView.vue` 渲染 host 房间的 QR
+- `network.js` `joinRemoteRoom(hostIp, hostPort)` 跨设备加入接口
+- 浏览器原生 WebSocket 客户端(无需 Capacitor 也能用真机作 host)
+- `src/common/qr-fallback.js` 抽 5 个纯函数(`formatHostAddress` / `buildJoinUrl` / `shouldShowFallback` / `describeFallbackMode` / `clipboardPayload`)
+- 跨设备端到端:2 真机 + 2 浏览器 tab 成功联机
+- Chrome 4-tab 联机 demo:全进对局、拿同手牌、出牌同步、踢人/host 迁移
+
+### 修复
+
+- WS seatMap 路由错误(P0)
+- 4-tab 联机 7 个连环 bug(合入 v0.2.0)
+- AndroidWs 重复 manifest 权限
+- `bindLastSenderSeat` 不再 no-op,真正调 WsServer.bindSeat
+
+### 测试
+
+- engine: 93 / 0(原 85, +8)
+- AI: 44 / 0
+- game: 78 / 0(原 24, +54 联机/AI 接管/seeded deal)
+- deal-animation: 11 / 0
+- audio: 117 / 0
+- card-api: 19 / 0
+- network: 89 / 0(原 71, +18 多 transport / 心跳调参)
+- multitab: 28 / 0
+- kick-player: **51 / 0**(新)
+- cross-device: **50 / 0**(新)
+- ws-server: **29 / 0**(新)
+- qr-fallback: **36 / 0**(新)
+- seat-rotation / GameView: **56 / 0**(新)
+- **701 / 0 全过**(v0.1.0 基线 279 + v3.8 新增 117 + v2.x 新增 305)
+
+### 端到端
+
+- 1 真机(host,AndroidWs)+ 3 浏览器 tab 联机:开局/出牌/踢人/host 迁移全跑通
+- 2 真机(host A + joiner B)+ 2 浏览器 tab:跨设备联机 + QR 兜底卡片
+- Chrome + CDP 4-tab 联机 demo + 截图回归
+
+---
+
 ## v0.2.0 (2026-06-10) — v3.8 4-tab 局域网联机 P0+P1+P2
 
 ### 新增
@@ -187,6 +259,6 @@ MINOR: 新功能
 PATCH: Bug 修复 / 小调整
 ```
 
-**当前**:`0.1.0`(v3.7 完工,文档齐备)
+**当前**:`0.3.0`(v2.x 收官,真机跨设备联机 + Capacitor Android 可发)
 
 **首发目标**:`v1.0.0`(H5 公开版本)
