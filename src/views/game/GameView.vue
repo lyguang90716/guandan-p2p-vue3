@@ -33,21 +33,20 @@ import GameViewMobile from './GameViewMobile.vue'
 const route = useRoute()
 
 // ===== 1. viewport 检测 =====
-// t2 期间 isMobile 临时 hardcode false,留待 t3 写完 mobile 布局后启用。
-// 避免 t2 / t3 之间被 matchMedia 误触发导致布局闪烁。
+// v2.4 task 3:启用 matchMedia 切换桌面 / 移动布局。
+// (max-width: 768px) 走 mobile,(max-width: 900px) 走折叠屏兜底也走 mobile。
+// 横屏 + 高度 ≤500 时,GameViewMobile.vue 内部 @media (orientation: landscape)
+// 会盖一层"请使用竖屏"遮罩兜底(由 component 内部 CSS 处理)。
 const isMobile = ref(false)
 let mq = null
 const handleChange = (e) => {
-  // t2 锁定: t3 完成前无视 matchMedia 变化
-  if (handleChange._locked) return
   isMobile.value = e.matches
 }
-handleChange._locked = true  // 标记锁定,t3 完成后清掉
 
 onMounted(() => {
   if (typeof window !== 'undefined' && window.matchMedia) {
     mq = window.matchMedia('(max-width: 768px)')
-    isMobile.value = false  // t2 hardcode; t3 时改为 mq.matches
+    isMobile.value = mq.matches         // t3:启用 matchMedia
     mq.addEventListener('change', handleChange)
   }
 })

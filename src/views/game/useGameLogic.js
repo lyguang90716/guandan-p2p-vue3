@@ -392,6 +392,12 @@ export function useGameLogic(opts = {}) {
       window.__gd_game = game.value
       window.__gd_selfSeat = selfSeat.value
       window.__gd_net = net
+      // v2.4 t3:暴露 isDealing / myHand / phase / currentPlayer 给 dev/screenshot 工具
+      window.__gd_isDealing = isDealing
+      window.__gd_myHand = myHand
+      window.__gd_myTurn = myTurn
+      window.__gd_phase = phase
+      window.__gd_currentPlayer = currentPlayer
     }
     game.value.on('dealt', ({ firstPlayer: fp, levelRank: lr }) => {
       firstPlayer.value = fp

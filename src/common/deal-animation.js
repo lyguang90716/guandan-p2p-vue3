@@ -42,6 +42,16 @@ class DealAnimation {
       console.warn('[deal-animation] missing required opts')
       return
     }
+    // v2.4 t3 测试 hook:window.__gd_skipDealAnim=true 时立即调 onComplete(用于 headless 截图)
+    if (typeof window !== 'undefined' && window.__gd_skipDealAnim) {
+      this._running = true
+      // 下个 microtask 触发 onComplete,跟正常路径行为一致
+      Promise.resolve().then(() => {
+        this._running = false
+        o.onComplete && o.onComplete()
+      })
+      return
+    }
     this._running = true
     this._cancel = false
     container.style.pointerEvents = 'none'
