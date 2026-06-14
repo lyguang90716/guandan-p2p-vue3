@@ -33,25 +33,38 @@ import GameViewMobile from './GameViewMobile.vue'
 const route = useRoute()
 
 // ===== 1. viewport 检测 =====
-// v2.4 task 3:启用 matchMedia 切换桌面 / 移动布局。
-// (max-width: 768px) 走 mobile,(max-width: 900px) 走折叠屏兜底也走 mobile。
-// 横屏 + 高度 ≤500 时,GameViewMobile.vue 内部 @media (orientation: landscape)
-// 会盖一层"请使用竖屏"遮罩兜底(由 component 内部 CSS 处理)。
+// v2.4 task 3 改:启用 matchMedia 切换桌面 / 移动布局。
+// 轻做法(横屏自动走 desktop):
+//   - 竖屏 + width ≤ 768px → mobile
+//   - 横屏 + height ≤ 500px(小屏如 iPhone SE)→ mobile
+//   - 其他(含手机横屏 iPad)→ desktop
+// 这样手机横屏直接套用 1667 行 desktop 布局,免去"请使用竖屏"硬遮罩。
 const isMobile = ref(false)
-let mq = null
-const handleChange = (e) => {
-  isMobile.value = e.matches
+let mqPortrait = null
+let mqNarrow = null
+let mqShort = null
+const update = () => {
+  const portrait = mqPortrait ? mqPortrait.matches : true
+  const narrow = mqNarrow ? mqNarrow.matches : false
+  const shortH = mqShort ? mqShort.matches : false
+  isMobile.value = (portrait && narrow) || (!portrait && shortH)
 }
 
 onMounted(() => {
   if (typeof window !== 'undefined' && window.matchMedia) {
-    mq = window.matchMedia('(max-width: 768px)')
-    isMobile.value = mq.matches         // t3:启用 matchMedia
-    mq.addEventListener('change', handleChange)
+    mqPortrait = window.matchMedia('(orientation: portrait)')
+    mqNarrow = window.matchMedia('(max-width: 768px)')
+    mqShort = window.matchMedia('(max-height: 500px)')
+    update()
+    mqPortrait.addEventListener('change', update)
+    mqNarrow.addEventListener('change', update)
+    mqShort.addEventListener('change', update)
   }
 })
 onUnmounted(() => {
-  if (mq) mq.removeEventListener('change', handleChange)
+  if (mqPortrait) mqPortrait.removeEventListener('change', update)
+  if (mqNarrow) mqNarrow.removeEventListener('change', update)
+  if (mqShort) mqShort.removeEventListener('change', update)
 })
 
 // ===== 2. 路由 query 解析 =====

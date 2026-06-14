@@ -23,7 +23,7 @@
    *   3. 左右对手座位:不渲染 PlayerSeat 整卡,改用 mini-pill 节省空间
    *   4. 智能理牌按钮 = 合并到操作栏(最左),不再独占中央下方
    *   5. 操作栏 4 大按钮:智能理牌 / 不出 / 提示 / 出牌(从左到右)
-   *   6. 竖屏锁定:@media (orientation: landscape) 兜底回 desktop
+   *   6. 横屏自动走 desktop(由 GameView.vue 的 isMobile 检测处理),本组件不渲染
    *   7. touch-action: manipulation(避免双击放大延迟)
    *   8. 字号 16px+ 避免 iOS Safari 自动放大
    *
@@ -1017,37 +1017,8 @@ button {
 }
 
 /* ============================================================
- * 8. 旋转兜底 — landscape 强制回 desktop 布局
- * (iPad 用户横屏,iPhone 横屏兜底)
+ * 8. 横屏兜底已移至 GameView.vue 的 isMobile 检测
+ * (landscape + 小屏高度走 mobile,其他 landscape 直接走 desktop 布局)
+ * 本组件不再需要 @media (orientation: landscape) 兜底 CSS
  * ============================================================ */
-@media (orientation: landscape) and (max-height: 500px) {
-  /* 横屏 + 高度过小:显示提示,引导用户切回竖屏 */
-  .page::before {
-    content: '请使用竖屏以获得最佳体验';
-    position: fixed;
-    inset: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: #0a1233;
-    color: #fff;
-    font-size: 16px;
-    font-weight: 700;
-    z-index: 9999;
-    letter-spacing: 2px;
-    text-align: center;
-    padding: 0 24px;
-  }
-  /* 横屏时隐藏所有内部内容 */
-  .page > *:not(.bg-deep) { display: none !important; }
-  .page > .bg-deep { z-index: -1; }
-}
-
-/* 强制竖屏(部分 Android 浏览器支持,无效时不报错) */
-@media (orientation: landscape) and (max-height: 500px) {
-  html {
-    /* 此属性在大多数浏览器无效(仅提示),不强制旋转 */
-    /* 通过 OS 层面锁定 orientation 更可靠 */
-  }
-}
 </style>
