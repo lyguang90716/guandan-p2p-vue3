@@ -78,6 +78,8 @@ function onCopy() {
 <style scoped>
 .qr-fallback-card {
   display: flex;
+  /* v2.4-p2 T1:横屏/窄屏宽度不够时 QR 单独一行 */
+  flex-wrap: wrap;
   gap: 14px;
   align-items: center;
   padding: 14px 16px;
@@ -110,7 +112,8 @@ function onCopy() {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  min-width: 0;
+  /* v2.4-p2 T1:降低最小宽度,320px 屏允许 body 换行;QR 在新一行,文字仍占 200px+ */
+  min-width: 200px;
 }
 .qr-fallback-headline {
   font-size: 14px;
@@ -143,7 +146,9 @@ function onCopy() {
   padding: 6px 10px;
   border-radius: 6px;
   border: 1px solid rgba(44,111,217,0.35);
-  word-break: break-all;
+  /* v2.4-p2 T1:中文保整(不会字间断),英文/数字允许任意断行 */
+  word-break: keep-all;
+  overflow-wrap: anywhere;
 }
 .qr-fallback-copy-btn {
   flex: 0 0 auto;
@@ -164,7 +169,9 @@ function onCopy() {
   color: #6e3f00;
   opacity: 0.85;
   line-height: 1.4;
-  word-break: break-all;
+  /* v2.4-p2 T1:中文保整,英文/数字允许任意断行(避免"加/入"被拆到不同行) */
+  word-break: keep-all;
+  overflow-wrap: anywhere;
 }
 .qr-fallback-join-url a {
   color: #2c6fd9;

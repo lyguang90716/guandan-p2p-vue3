@@ -82,12 +82,9 @@
       </div>
       <!-- v2.0 改造:host 端展示本机 IP + 端口 + 二维码 (扫码加入) -->
       <!-- v2.2 task A:QR fallback 卡片永远显示作为兜底 (qr 失败时尤其重要) -->
+      <!-- v2.4-p2 T1:删 .host-info-row(QrFallbackCard 内部已经渲染 formatHostAddress(hostIp, hostPort) 一次,
+           重复显示 IP 是冗余的,只保留 QrFallbackCard 作为单源) -->
       <div v-if="isHost" class="host-info">
-        <div class="host-info-row">
-          <span class="host-info-label">本机 IP</span>
-          <span class="host-info-value">{{ hostIp || '加载中…' }}</span>
-          <span class="host-info-port">:{{ hostPort }}</span>
-        </div>
         <QrFallbackCard
           :host-ip="hostIp"
           :host-port="hostPort"
@@ -122,7 +119,8 @@
       </div>
     </div>
 
-    <div class="cut-card" @click="onCut">♠♦♣<br/><span class="cut-card-text">切牌</span></div>
+    <!-- v2.4-p2 T1:补 ♥(原 ♠♦♣ 漏了第四个花色) -->
+    <div class="cut-card" @click="onCut">♠♦♣♥<br/><span class="cut-card-text">切牌</span></div>
     <div class="ready-status" v-if="myReady"><span>已准备</span></div>
     <div class="suit-picker">
       <span class="suit" :class="{active: mySuit===0}" @click="mySuit=0">♣</span>
@@ -586,13 +584,24 @@ function onKickPlayer(seat) {
 .seat-left { left: 20px; top: 280px; }
 .seat-top { left: 50%; top: 180px; transform: translateX(-50%); }
 .seat-right { right: 20px; top: 280px; }
-.seat-bottom { left: 50%; bottom: 40px; transform: translateX(-50%); }
+.seat-bottom {
+  left: 50%;
+  /* v2.4-p2 T1:portrait 让出 200px 给 .info-card(info-card 改 bottom 定位后会向上挤压 seat-bottom) */
+  bottom: max(220px, calc(20px + env(safe-area-inset-bottom, 0px)) + 200px);
+  transform: translateX(-50%);
+}
 .info-card {
+  /* v2.4-p2 T1:改 bottom 定位,让 4 座位在信息卡上方,横屏也成立(landscape 分支另设) */
   position: absolute;
-  left: 50%; top: 420px;
+  left: 50%;
+  top: auto;
+  bottom: max(20px, env(safe-area-inset-bottom, 0px) + 20px);
   transform: translateX(-50%);
   width: 90%;
   max-width: 440px;
+  /* v2.4-p2 T1:320×568 屏不溢出,允许内部滚动 */
+  max-height: 80vh;
+  overflow-y: auto;
   background: linear-gradient(180deg, rgba(232,238,255,0.96), rgba(212,222,255,0.96));
   border-radius: 16px;
   padding: 18px 22px;
@@ -653,6 +662,18 @@ function onKickPlayer(seat) {
   cursor: pointer;
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+  /* v2.4-p2 T1:z-index:10 高过 .info-card 的 8,避免被信息卡覆盖 */
+  z-index: 10;
+}
+/* v2.4-p2 T1:320px 屏切牌按钮压缩到 60×60,避免被 .seat-right 覆盖 */
+@media (max-width: 360px) {
+  .cut-card {
+    right: 8px;
+    bottom: 80px;
+    width: 60px;
+    height: 60px;
+    font-size: 14px;
+  }
 }
 .cut-card-text { font-size: 11px; color: #ff7e3d; margin-top: 2px; }
 .ready-status {
