@@ -564,7 +564,11 @@ export function useGameLogic(opts = {}) {
 
   function onHintToggle(show) {
     if (show) {
-      const r = AI.autoPlayGrouped(myHand.value, lastPlay.value, levelRank.value, { isTeammateLast: false })
+      // 跟牌场景:用 AI.decide 找最小可压(autoPlayGrouped 贪最强,不看 lastPlay,会导致提示用炸弹)
+      // 首家场景:lastPlay=null,继续用 autoPlayGrouped 领出
+      const r = lastPlay.value
+        ? AI.decide(myHand.value, lastPlay.value, levelRank.value, { isTeammateLast: false })
+        : AI.autoPlayGrouped(myHand.value, lastPlay.value, levelRank.value, { isTeammateLast: false })
       if (r?.type === 'play' && Array.isArray(r.cards) && r.cards.length > 0) {
         hintCards.value = r.cards.map(c => cardKey(c))
         const next = {}
