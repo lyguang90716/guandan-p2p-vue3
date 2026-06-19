@@ -33,7 +33,7 @@
    *   - 不引入 vw / vh 极端单位(避免键盘弹出 / 状态栏变化抖动)
    *   - scroll 用 -webkit-overflow-scrolling: touch
    -->
-  <div class="page" :class="{ dealing: isDealing, bomb: isShaking }">
+  <div class="page" :class="{ dealing: isDealing, bomb: isShaking, 'is-landscape': isLandscape }">
     <!-- 背景:渐变蓝紫底色(跟 desktop 一致) -->
     <div class="bg-deep"></div>
 
@@ -280,7 +280,7 @@
  *   - 不动 useGameLogic.js / 子组件 props / 路由 / 旋转公式
  *   - 不引入新依赖
  */
-import { ref } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 
 import PlayerSeat from '@/components/PlayerSeat.vue'
 import TableCenter from '@/components/TableCenter.vue'
@@ -334,6 +334,37 @@ function truncateName(s) {
 
 // emit:让父级 GameView 也能响应 seatClick(用于调试 / 后续扩展)
 defineEmits(['seatClick', 'menu'])
+
+// v2.5:横屏检测 → 给 .page 加 .is-landscape class,让 CSS 在 scoped 内直接覆盖
+// 横屏标准:landscape + max-height: 500px(手机横屏 h ≤ 430)
+// GameView.vue 的 matchMedia 把横屏 844x390 也路由到 GameViewMobile,
+// 所以这里必须加 .is-landscape 兜底,否则手机横屏布局挤压
+const isLandscape = ref(false)
+let mqLandscape = null
+const updateLandscape = () => {
+  if (!mqLandscape) return
+  isLandscape.value = mqLandscape.matches
+}
+onMounted(() => {
+  if (typeof window !== 'undefined' && window.matchMedia) {
+    mqLandscape = window.matchMedia('(orientation: landscape) and (max-height: 500px)')
+    updateLandscape()
+    if (mqLandscape.addEventListener) {
+      mqLandscape.addEventListener('change', updateLandscape)
+    } else if (mqLandscape.addListener) {
+      mqLandscape.addListener(updateLandscape)
+    }
+  }
+})
+onUnmounted(() => {
+  if (mqLandscape) {
+    if (mqLandscape.removeEventListener) {
+      mqLandscape.removeEventListener('change', updateLandscape)
+    } else if (mqLandscape.removeListener) {
+      mqLandscape.removeListener(updateLandscape)
+    }
+  }
+})
 </script>
 
 <style scoped>
@@ -719,9 +750,9 @@ button {
   font-size: 9px;
   padding: 2px 7px;
 }
-.table-area :deep(.first-tip-inline .tip-emoji) { font-size: 11px; }
-.table-area :deep(.first-tip-inline .tip-name) { font-size: 10px; }
-.table-area :deep(.first-tip-inline .tip-act) { font-size: 10px; }
+.table-area :deep(.first-tip-bottom .tip-emoji) { font-size: 11px; }
+.table-area :deep(.first-tip-bottom .tip-name) { font-size: 10px; }
+.table-area :deep(.first-tip-bottom .tip-act) { font-size: 10px; }
 
 /* 状态条(发牌中 / 等待) */
 .status-tip-mobile {
@@ -752,9 +783,12 @@ button {
   padding: 0 4px 6px;
   background: linear-gradient(180deg, transparent, rgba(0, 0, 0, 0.55));
   z-index: 5;
-  transition: opacity var(--t-med, 240ms) var(--ease-out, ease);
+  /* v2.5:发牌完手牌"立刻可见",去掉 opacity transition */
+  transition: none;
 }
 .hand-area.disabled { opacity: 0.3; pointer-events: none; }
+/* v2.5:发牌中手牌区隐藏(立刻切换,无 transition) */
+.dealing .hand-area { opacity: 0; pointer-events: none; transition: none; }
 .hand-area.is-urgent {
   background: linear-gradient(180deg, transparent, rgba(229, 57, 53, 0.35));
   box-shadow: inset 0 4px 24px rgba(229, 57, 53, 0.45);
@@ -773,23 +807,29 @@ button {
   align-items: flex-end;
   flex-wrap: nowrap;
   min-height: 110px;
-  padding: 18px 4px 18px;
+  /* v2.5:左右 padding 4 → 16,加 12px 黑边(用户反馈"左右两侧留一些空间") */
+  padding: 8px 16px;
   gap: 0;
-  overflow-x: auto;
-  overflow-y: visible;
+  /* v3.9:overflow-x auto + overflow-y visible 会被 CSS spec 强制升级为 auto
+   *   (如果 overflow-x 不是 visible,overflow-y 必须也非 visible),导致竖叠多张同 rank
+   *   牌的最上牌 top:-32 溢出手牌区顶部 32px 全部被裁 → 用户看到"4/5/7 牌上半看不到"。
+   *   两个方向都 visible:牌可以溢出上下边界(顶部溢出 rank badge,底部溢出 count badge) */
+  overflow: visible;
   -webkit-overflow-scrolling: touch;
-  scrollbar-width: thin;
+  scrollbar-width: none;
 }
 /* 移动端手牌列:56px 宽,纵向叠 3 张
  * v2.4-p3: 列负 margin 让相邻牌的视觉边距从 12px 压到 2px,
- *         列 width 56px 不变 → 点击 hit area 仍 ≥ 44px (移动端规范) */
+ *         列 width 56px 不变 → 点击 hit area 仍 ≥ 44px (移动端规范)
+ * v2.5: 列负 margin -10 → -16,列视觉间距更紧(用户反馈"自己手里的牌可以更紧密一些"),
+ *       同时 .hand-inner 左右 padding 加到 16 让两侧留 12px 黑边 */
 .hand-column {
   position: relative;
   width: 56px;             /* 桌面 78 → 移动 56(每屏装 9 列) */
   min-height: 84px;
   flex-shrink: 0;
   margin: 0;
-  margin-left: -10px;      /* 叠列:列 56 - 牌 44 - 叠 10 = 2px 可见间隙 */
+  margin-left: -16px;      /* v2.5: -10 → -16,列视觉更紧 */
   padding: 12px 0 2px;
   cursor: pointer;
   background: rgba(255, 255, 255, 0.04);
@@ -816,7 +856,11 @@ button {
 
 .col-rank {
   position: absolute;
-  top: -16px;
+  /* v3.9: top -16px → -52px,让 rank badge 真正浮在牌柱顶部上方
+   *   (hand-card 多张同 rank 牌用 inline top: i*-16px,i=2 时 top=-32
+   *    让最上牌溢出 hand-column 顶部 32px,旧 -16 会跟最上牌角标重叠,
+   *    z-index 5 反而把"3♥"角标下半遮住 → 用户看到"3 牌上半看不到") */
+  top: -52px;
   left: 50%;
   transform: translateX(-50%);
   min-width: 18px;
@@ -1024,8 +1068,184 @@ button {
 }
 
 /* ============================================================
- * 8. 横屏兜底已移至 GameView.vue 的 isMobile 检测
- * (landscape + 小屏高度走 mobile,其他 landscape 直接走 desktop 布局)
- * 本组件不再需要 @media (orientation: landscape) 兜底 CSS
+ * 8. v2.5:横屏兜底(.page.is-landscape)
+ * 844x390 手机横屏走 GameViewMobile(因为 GameView.vue matchMedia 判定 landscape + h≤500 → mobile),
+ * 原本竖屏布局的 4 区域分配(8% / 15% / 35% / 28% / 14%)挤不下 390 高度,
+ * 用 .is-landscape class 钩子重新分配:50(顶HUD) / 80(队友+左右AI) / 100(桌面) / 110(手牌) / 50(操作栏)
  * ============================================================ */
+.page.is-landscape {
+  /* 重新分配高度:5 段堆叠 */
+}
+
+/* 顶 HUD 压缩到 50px */
+.page.is-landscape .hud-top {
+  height: 50px;
+  padding: 4px 6px;
+}
+.page.is-landscape .hud-value { font-size: 13px; }
+.page.is-landscape .hud-label { font-size: 8px; }
+.page.is-landscape .menu-btn,
+.page.is-landscape .chat-btn {
+  width: 36px;
+  height: 36px;
+  font-size: 16px;
+}
+.page.is-landscape .clock-float {
+  height: 36px;
+  min-width: 40px;
+  padding: 0 8px;
+}
+.page.is-landscape .clock-num { font-size: 14px; }
+.page.is-landscape .opponent-clock-float {
+  height: 36px;
+  min-width: 40px;
+  padding: 0 8px;
+  font-size: 10px;
+}
+
+/* 队友座位(顶 HUD 之下):top 8% → top 50px,缩 0.6 */
+.page.is-landscape .seat-teammate {
+  top: 50px;
+}
+.page.is-landscape .seat-teammate :deep(.teammate-compact) {
+  transform: scale(0.55);
+  transform-origin: top center;
+  animation: none;
+}
+
+/* 左右 AI 座位(队友之下):top 24% → top 90px,缩 0.55 */
+.page.is-landscape .seat-left-mobile,
+.page.is-landscape .seat-right-mobile {
+  top: 90px;
+}
+.page.is-landscape .opp-pill {
+  transform: scale(0.7);
+  transform-origin: top left;
+  animation: none;
+}
+.page.is-landscape .seat-right-mobile .opp-pill {
+  transform-origin: top right;
+}
+
+/* 中央桌面:top 32% → top 140px,height 22vh → 90px */
+.page.is-landscape .table-area {
+  top: 140px;
+  height: 90px;
+  width: clamp(180px, 40vw, 260px);
+}
+.page.is-landscape .table-area :deep(.table-center-wrap) {
+  height: 100%;
+  width: 100%;
+  margin-top: 0;
+  transform: none;  /* 取消 mobile 缩 0.6,直接渲染 */
+}
+.page.is-landscape .table-area :deep(.ellipse-table) {
+  width: 100%;
+  height: 100%;
+  max-width: none;
+}
+.page.is-landscape .table-area :deep(.table-deco svg) {
+  width: 160px;
+  height: 80px;
+}
+.page.is-landscape .table-area :deep(.card-stack) {
+  width: 160px;
+  height: 70px;
+}
+.page.is-landscape .table-area :deep(.table-info-pill) {
+  font-size: 8px;
+  padding: 1px 5px;
+}
+.page.is-landscape .table-area :deep(.table-info-top) {
+  top: -16px;
+  gap: 4px;
+}
+.page.is-landscape .table-area :deep(.first-tip-bottom) {
+  /* v3.9:first-tip-bottom 已挪进 ellipse-table 内部,这里 bottom 用正值
+   *   (4px) 让胶囊贴椭圆底内沿,溢出椭圆部分被 ellipse overflow:hidden 裁掉
+   *   → 横屏 9 个手牌顶数字再也不被胶囊压住 */
+  bottom: 4px;
+  padding: 2px 8px;
+  font-size: 10px;
+}
+
+/* 状态条:从 top 18% 挪到顶 HUD 之下 */
+.page.is-landscape .status-tip-mobile {
+  top: 110px;
+}
+
+/* 手牌:bottom 14vh → bottom 50px(操作栏之上)
+ * v2.5 patch: overflow hidden 改成 visible + 加 padding-top 12 + max-height 110,
+ *   否则 col-rank (top -10) 浮在 .hand-area 顶外的部分会被裁,用户看不到"级"badge */
+.page.is-landscape .hand-area {
+  bottom: 50px;
+  padding: 12px 4px 6px;
+  max-height: 110px;
+  overflow: visible;
+}
+.page.is-landscape .hand-inner {
+  min-height: 50px;
+  padding: 4px 16px 6px;
+  gap: 0;
+}
+.page.is-landscape .hand-column {
+  width: 36px;
+  min-height: 40px;
+  margin-left: -6px;
+  padding: 6px 0 2px;
+}
+.page.is-landscape .hand-column .hand-card {
+  left: 2px;
+  width: 32px;
+  height: 46px;
+  --hand-card-w: 32px;
+  --hand-card-h: 46px;
+}
+/* 限制手牌卡竖叠 top,牌顶不浮出 .hand-area(只 col-rank 浮出 8px) */
+.page.is-landscape .hand-column .hand-card:nth-child(1) { top: 0 !important; }
+.page.is-landscape .hand-column .hand-card:nth-child(2) { top: -4px !important; }
+.page.is-landscape .hand-column .hand-card:nth-child(3) { top: -8px !important; }
+.page.is-landscape .hand-column .hand-card:nth-child(n+4) { top: -12px !important; }
+.page.is-landscape .col-rank {
+  /* v3.9: top -8px → -34px,横屏 hand-card 最多 top:-28px,
+   *   让 rank badge 浮在最上牌之上,不被遮挡 */
+  top: -34px;
+  height: 11px;
+  font-size: 8px;
+  min-width: 14px;
+  z-index: 6;
+}
+.page.is-landscape .col-count {
+  bottom: -4px;
+  height: 10px;
+  font-size: 8px;
+  min-width: 14px;
+  padding: 0 2px;
+  z-index: 6;
+}
+
+/* 操作栏:bottom 0,height 50px */
+.page.is-landscape .action-bar {
+  bottom: 0;
+  height: 50px;
+  padding: 4px 6px;
+  grid-template-columns: 1fr 1fr 1fr 1fr;
+  gap: 4px;
+}
+.page.is-landscape .action-bar button {
+  height: 42px;
+  min-height: 42px;
+  font-size: 11px;
+  letter-spacing: 0.5px;
+}
+.page.is-landscape .action-icon { font-size: 14px; }
+.page.is-landscape .action-text { font-size: 9px; }
+
+/* toast 缩 */
+.page.is-landscape .nick-toast,
+.page.is-landscape .host-mig-toast {
+  top: 60px;
+  font-size: 11px;
+  padding: 6px 14px;
+}
 </style>
